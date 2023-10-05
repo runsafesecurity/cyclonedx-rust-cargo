@@ -63,7 +63,17 @@ impl SbomGenerator {
             ws.root_manifest().to_string_lossy()
         );
         let workspace_config = config_from_toml(ws.custom_metadata())?;
-        let members: Vec<Package> = ws.members().cloned().collect();
+
+        let current_package_result = ws.current();
+        let current_package = match current_package_result {
+            Ok(pkg) => pkg,
+            Err(_) => {
+                log::debug!("Skipping virtual workspace Cargo.toml");
+                return Ok(Vec::with_capacity(0));
+            },
+        };
+
+        let members: Vec<Package> = ws.members().cloned().filter(|x| x.manifest_path() == current_package.manifest_path()).collect();
 
         let (package_ids, resolve) =
             ops::resolve_ws(&ws).map_err(|error| GeneratorError::CargoConfigError {

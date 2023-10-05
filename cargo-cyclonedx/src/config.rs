@@ -89,6 +89,7 @@ impl FromStr for IncludedDependencies {
 pub struct OutputOptions {
     pub cdx_extension: CdxExtension,
     pub prefix: Prefix,
+    // pub single_manifest: bool,
 }
 
 impl Default for OutputOptions {
@@ -96,6 +97,7 @@ impl Default for OutputOptions {
         Self {
             cdx_extension: CdxExtension::default(),
             prefix: Prefix::Pattern(Pattern::Bom),
+            // single_manifest: false,
         }
     }
 }
