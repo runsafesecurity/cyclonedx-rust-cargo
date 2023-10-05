@@ -73,7 +73,7 @@ impl SbomGenerator {
             },
         };
 
-        let members: Vec<Package> = ws.members().cloned().filter(|x| x.manifest_path() == current_package.manifest_path()).collect();
+        let members: Vec<Package> = ws.members().cloned().collect();
 
         let (package_ids, resolve) =
             ops::resolve_ws(&ws).map_err(|error| GeneratorError::CargoConfigError {
@@ -83,6 +83,9 @@ impl SbomGenerator {
 
         let mut result = Vec::with_capacity(members.len());
         for member in members.iter() {
+            if member.manifest_path() == current_package.manifest_path() {
+                continue;
+            }
             log::trace!(
                 "Processing the package {} configuration",
                 member.manifest_path().to_string_lossy()
