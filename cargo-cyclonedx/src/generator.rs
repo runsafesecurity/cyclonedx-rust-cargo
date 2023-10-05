@@ -83,7 +83,7 @@ impl SbomGenerator {
 
         let mut result = Vec::with_capacity(members.len());
         for member in members.iter() {
-            if member.manifest_path() == current_package.manifest_path() {
+            if member.manifest_path() != current_package.manifest_path() {
                 continue;
             }
             log::trace!(
