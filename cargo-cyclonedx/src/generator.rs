@@ -54,6 +54,7 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 
 use log::Level;
+use std::any::Any;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::convert::TryFrom;
@@ -87,58 +88,29 @@ pub struct TargetKinds(
 impl SbomGenerator {
     pub fn create_sboms(
         meta: CargoMetadata,
+        root_manifest_path: PathBuf,
         config: &SbomConfig,
     ) -> Result<Vec<GeneratedSbom>, GeneratorError> {
-        log::trace!(
-            "Processing the workspace {} configuration",
-            ws.root_manifest().to_string_lossy()
-        );
-        let workspace_config = config_from_toml(ws.custom_metadata())?;
-
-        let current_package_result = ws.current();
-        let current_package = match current_package_result {
-            Ok(pkg) => pkg,
-            Err(_) => {
-                log::debug!("Skipping virtual workspace Cargo.toml");
-                return Ok(Vec::with_capacity(0));
-            },
-        };
-
-        let members: Vec<Package> = ws.members().cloned().collect();
-
-        let (package_ids, resolve) =
-            ops::resolve_ws(&ws).map_err(|error| GeneratorError::CargoConfigError {
-                config_filepath: ws.root_manifest().to_string_lossy().to_string(),
-                error,
-            })?;
+        log::trace!("Processing the workspace {}", meta.workspace_root);
+        let members: Vec<PackageId> = meta.workspace_members;
+        let packages = index_packages(meta.packages);
+        let resolve = index_resolve(meta.resolve.unwrap().nodes);
 
         let mut result = Vec::with_capacity(members.len());
         for member in members.iter() {
-            if member.manifest_path() != current_package.manifest_path() {
+            let manifest_path = packages[member].manifest_path.clone().into_std_path_buf();
+
+            if root_manifest_path != manifest_path {
                 continue;
             }
-            log::trace!(
-                "Processing the package {} configuration",
-                member.manifest_path().to_string_lossy()
-            );
-            let package_config = config_from_toml(member.manifest().custom_metadata())?;
-            let config = workspace_config
-                .merge(&package_config)
-                .merge(config_override);
 
-            log::trace!("Config from workspace metadata: {:?}", workspace_config);
-            log::trace!("Config from package metadata: {:?}", package_config);
-            log::trace!("Config from config override: {:?}", config_override);
-            log::debug!("Config from merged config: {:?}", config);
-
-            let dependencies =
+            log::trace!("Processing the package {}", member);
+            let (dependencies, pruned_resolve) =
                 if config.included_dependencies() == IncludedDependencies::AllDependencies {
                     all_dependencies(member, &packages, &resolve)
                 } else {
                     top_level_dependencies(member, &packages, &resolve)
                 };
-
-            let manifest_path = packages[member].manifest_path.clone().into_std_path_buf();
 
             let mut crate_hashes = HashMap::new();
             match locate_cargo_lock(&manifest_path) {
