@@ -1,5 +1,7 @@
+use cyclonedx_bom::models::bom::SpecVersion;
+use serde::Deserialize;
+use std::collections::HashSet;
 use std::str::FromStr;
-
 use thiserror::Error;
 
 /*
@@ -21,20 +23,21 @@ use thiserror::Error;
  */
 use crate::format::Format;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SbomConfig {
     pub format: Option<Format>,
     pub included_dependencies: Option<IncludedDependencies>,
     pub output_options: Option<OutputOptions>,
+    pub features: Option<Features>,
+    pub target: Option<Target>,
+    pub license_parser: Option<LicenseParserOptions>,
+    pub describe: Option<Describe>,
+    pub spec_version: Option<SpecVersion>,
 }
 
 impl SbomConfig {
     pub fn empty_config() -> Self {
-        Self {
-            format: None,
-            included_dependencies: None,
-            output_options: None,
-        }
+        Default::default()
     }
 
     pub fn merge(&self, other: &SbomConfig) -> SbomConfig {
@@ -45,6 +48,15 @@ impl SbomConfig {
                 .output_options
                 .clone()
                 .or_else(|| self.output_options.clone()),
+            features: other.features.clone().or_else(|| self.features.clone()),
+            target: other.target.clone().or_else(|| self.target.clone()),
+            license_parser: other
+                .license_parser
+                .clone()
+                .map(|other| self.license_parser.clone().unwrap_or_default().merge(other))
+                .or_else(|| self.license_parser.clone()),
+            describe: other.describe.or(self.describe),
+            spec_version: other.spec_version.or(self.spec_version),
         }
     }
 
@@ -59,18 +71,17 @@ impl SbomConfig {
     pub fn output_options(&self) -> OutputOptions {
         self.output_options.clone().unwrap_or_default()
     }
+
+    pub fn license_parser(&self) -> LicenseParserOptions {
+        self.license_parser.clone().unwrap_or_default()
+    }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum IncludedDependencies {
     TopLevelDependencies,
+    #[default]
     AllDependencies,
-}
-
-impl Default for IncludedDependencies {
-    fn default() -> Self {
-        Self::TopLevelDependencies
-    }
 }
 
 impl FromStr for IncludedDependencies {
@@ -85,66 +96,56 @@ impl FromStr for IncludedDependencies {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct OutputOptions {
-    pub cdx_extension: CdxExtension,
-    pub prefix: Prefix,
-    // pub single_manifest: bool,
+    pub filename: FilenamePattern,
+    pub platform_suffix: PlatformSuffix,
 }
 
-impl Default for OutputOptions {
-    fn default() -> Self {
-        Self {
-            cdx_extension: CdxExtension::default(),
-            prefix: Prefix::Pattern(Pattern::Bom),
-            // single_manifest: false,
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Features {
+    pub all_features: bool,
+    pub no_default_features: bool,
+    pub features: Vec<String>,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub enum Target {
+    #[default]
+    AllTargets,
+    SingleTarget(String),
+}
+
+impl Target {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Target::AllTargets => "all",
+            Target::SingleTarget(target) => target.as_str(),
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CdxExtension {
-    Included,
-    NotIncluded,
+pub enum FilenamePattern {
+    CrateName,
+    Custom(FilenameOverride),
 }
 
-impl CdxExtension {
-    pub fn extension(&self) -> String {
-        match &self {
-            CdxExtension::Included => ".cdx".to_string(),
-            CdxExtension::NotIncluded => "".to_string(),
-        }
-    }
-}
-
-impl Default for CdxExtension {
+impl Default for FilenamePattern {
     fn default() -> Self {
-        Self::NotIncluded
+        Self::CrateName
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Prefix {
-    Pattern(Pattern),
-    Custom(CustomPrefix),
-}
-
-impl Default for Prefix {
-    fn default() -> Self {
-        Self::Pattern(Pattern::default())
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum Pattern {
+    #[default]
     Bom,
     Package,
-}
-
-impl Default for Pattern {
-    fn default() -> Self {
-        Self::Bom
-    }
+    Binary,
+    /// Not to be confused with a compilation target:
+    /// https://doc.rust-lang.org/cargo/reference/cargo-targets.html
+    CargoTarget,
 }
 
 impl FromStr for Pattern {
@@ -154,20 +155,22 @@ impl FromStr for Pattern {
         match s {
             "bom" => Ok(Self::Bom),
             "package" => Ok(Self::Package),
+            "binary" => Ok(Self::Binary),
+            "cargo-target" => Ok(Self::CargoTarget),
             _ => Err(format!("Expected bom or package, got `{}`", s)),
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CustomPrefix(String);
+pub struct FilenameOverride(String);
 
-impl CustomPrefix {
-    pub fn new(custom_prefix: impl Into<String>) -> Result<Self, PrefixError> {
+impl FilenameOverride {
+    pub fn new(custom_prefix: impl Into<String>) -> Result<Self, FilenameOverrideError> {
         let prefix = custom_prefix.into();
 
         if prefix.contains(std::path::MAIN_SEPARATOR) {
-            Err(PrefixError::CustomPrefixError(
+            Err(FilenameOverrideError::TheOne(
                 std::path::MAIN_SEPARATOR.to_string(),
             ))
         } else {
@@ -176,16 +179,68 @@ impl CustomPrefix {
     }
 }
 
-impl ToString for CustomPrefix {
-    fn to_string(&self) -> String {
-        self.0.clone()
+impl std::fmt::Display for FilenameOverride {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
     }
 }
 
 #[derive(Error, Debug, PartialEq, Eq)]
-pub enum PrefixError {
+pub enum FilenameOverrideError {
     #[error("Illegal characters in custom prefix string: {0}")]
-    CustomPrefixError(String),
+    TheOne(String),
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub enum PlatformSuffix {
+    Included,
+    #[default]
+    NotIncluded,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct LicenseParserOptions {
+    /// Use lax or strict parsing
+    #[serde(default)]
+    pub mode: ParseMode,
+
+    /// Silently accept the named licenses
+    #[serde(default)]
+    pub accept_named: HashSet<String>,
+}
+
+impl LicenseParserOptions {
+    pub fn merge(mut self, other: Self) -> Self {
+        Self {
+            mode: other.mode,
+            accept_named: {
+                self.accept_named.extend(other.accept_named);
+                self.accept_named
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all(deserialize = "kebab-case"))]
+pub enum ParseMode {
+    /// Parse licenses in strict mode
+    Strict,
+    /// Parse licenses in lax mode
+    #[default]
+    Lax,
+}
+
+/// What does the SBOM describe?
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
+pub enum Describe {
+    /// Describe the entire crate in a single SBOM file, with Cargo targets as subcomponents. (default)
+    #[default]
+    Crate,
+    /// A separate SBOM is emitted for each binary (bin, cdylib) while all other targets are ignored
+    Binaries,
+    /// A separate SBOM is emitted for each Cargo target, including things that aren't directly executable (e.g rlib)
+    AllCargoTargets,
 }
 
 #[cfg(test)]
@@ -193,26 +248,82 @@ mod test {
     use super::*;
 
     #[test]
-    fn it_should_error_for_a_prefix_with_a_path_separator() {
-        let prefix = format!("directory{}prefix", std::path::MAIN_SEPARATOR);
+    fn it_should_error_for_a_filename_with_a_path_separator() {
+        let filename = format!("directory{}filename", std::path::MAIN_SEPARATOR);
 
-        let actual = CustomPrefix::new(prefix)
-            .expect_err("Should not have been able to create CustomPrefix with path separator");
+        let actual = FilenameOverride::new(filename)
+            .expect_err("Should not have been able to create Customfilename with path separator");
 
-        let expected = PrefixError::CustomPrefixError(std::path::MAIN_SEPARATOR.to_string());
+        let expected = FilenameOverrideError::TheOne(std::path::MAIN_SEPARATOR.to_string());
 
         assert_eq!(actual, expected);
     }
 
     #[test]
-    fn it_should_create_a_custom_prefix_from_a_valid_string() {
-        let prefix = "customprefix".to_string();
+    fn it_should_create_a_custom_filename_from_a_valid_string() {
+        let filename = "customfilename".to_string();
 
-        let actual = CustomPrefix::new(prefix.clone())
-            .expect("Should have been able to create CustomPrefix");
+        let actual = FilenameOverride::new(filename.clone())
+            .expect("Should have been able to create Customfilename");
 
-        let expected = CustomPrefix(prefix);
+        let expected = FilenameOverride(filename);
 
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn it_should_merge_license_names() {
+        let config_1 = SbomConfig {
+            license_parser: Some(LicenseParserOptions {
+                mode: ParseMode::Strict,
+                accept_named: ["Foo".into()].into(),
+            }),
+            ..Default::default()
+        };
+        let config_2 = SbomConfig {
+            license_parser: Some(LicenseParserOptions {
+                mode: ParseMode::Lax,
+                accept_named: ["Bar".into()].into(),
+            }),
+            ..Default::default()
+        };
+
+        let config = config_1.merge(&config_2);
+
+        assert_eq!(
+            config,
+            SbomConfig {
+                license_parser: Some(LicenseParserOptions {
+                    mode: ParseMode::Lax,
+                    accept_named: ["Foo".into(), "Bar".into()].into(),
+                }),
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn it_should_keep_strict() {
+        let config_1 = SbomConfig {
+            license_parser: Some(LicenseParserOptions {
+                mode: ParseMode::Strict,
+                accept_named: ["Foo".into()].into(),
+            }),
+            ..Default::default()
+        };
+        let config_2 = SbomConfig::default();
+
+        let config = config_1.merge(&config_2);
+
+        assert_eq!(
+            config,
+            SbomConfig {
+                license_parser: Some(LicenseParserOptions {
+                    mode: ParseMode::Strict,
+                    accept_named: ["Foo".into()].into(),
+                }),
+                ..Default::default()
+            }
+        );
     }
 }

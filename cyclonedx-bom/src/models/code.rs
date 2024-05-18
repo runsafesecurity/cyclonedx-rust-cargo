@@ -17,16 +17,18 @@
  */
 
 use crate::{
-    external_models::{date_time::DateTime, normalized_string::NormalizedString, uri::Uri},
-    validation::{
-        FailureReason, Validate, ValidationContext, ValidationError, ValidationPathComponent,
-        ValidationResult,
+    external_models::{
+        date_time::DateTime,
+        normalized_string::{validate_normalized_string, NormalizedString},
+        uri::{validate_uri, Uri},
+        validate_date_time,
     },
+    validation::{Validate, ValidationContext, ValidationError, ValidationResult},
 };
 
-use super::attached_text::AttachedText;
+use super::{attached_text::AttachedText, bom::SpecVersion};
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Commit {
     pub uid: Option<NormalizedString>,
     pub url: Option<Uri>,
@@ -36,102 +38,44 @@ pub struct Commit {
 }
 
 impl Validate for Commit {
-    fn validate_with_context(
-        &self,
-        context: ValidationContext,
-    ) -> Result<ValidationResult, ValidationError> {
-        let mut results: Vec<ValidationResult> = vec![];
-
-        if let Some(uid) = &self.uid {
-            let context = context.extend_context_with_struct_field("Commit", "uid");
-
-            results.push(uid.validate_with_context(context)?);
-        }
-
-        if let Some(url) = &self.url {
-            let context = context.extend_context_with_struct_field("Commit", "url");
-
-            results.push(url.validate_with_context(context)?);
-        }
-
-        if let Some(author) = &self.author {
-            let context = context.extend_context_with_struct_field("Commit", "author");
-
-            results.push(author.validate_with_context(context)?);
-        }
-
-        if let Some(committer) = &self.committer {
-            let context = context.extend_context_with_struct_field("Commit", "committer");
-
-            results.push(committer.validate_with_context(context)?);
-        }
-
-        if let Some(message) = &self.message {
-            let context = context.extend_context_with_struct_field("Commit", "message");
-
-            results.push(message.validate_with_context(context)?);
-        }
-
-        Ok(results
-            .into_iter()
-            .fold(ValidationResult::default(), |acc, result| acc.merge(result)))
+    fn validate_version(&self, version: SpecVersion) -> ValidationResult {
+        ValidationContext::new()
+            .add_field_option("uid", self.uid.as_ref(), validate_normalized_string)
+            .add_field_option("url", self.url.as_ref(), validate_uri)
+            .add_struct_option("author", self.author.as_ref(), version)
+            .add_struct_option("committer", self.committer.as_ref(), version)
+            .add_field_option("message", self.message.as_ref(), validate_normalized_string)
+            .into()
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Commits(pub Vec<Commit>);
 
 impl Validate for Commits {
-    fn validate_with_context(
-        &self,
-        context: ValidationContext,
-    ) -> Result<ValidationResult, ValidationError> {
-        let mut results: Vec<ValidationResult> = vec![];
-
-        for (index, commit) in self.0.iter().enumerate() {
-            let commit_context =
-                context.extend_context(vec![ValidationPathComponent::Array { index }]);
-            results.push(commit.validate_with_context(commit_context)?);
-        }
-
-        Ok(results
-            .into_iter()
-            .fold(ValidationResult::default(), |acc, result| acc.merge(result)))
+    fn validate_version(&self, version: SpecVersion) -> ValidationResult {
+        ValidationContext::new()
+            .add_list("inner", &self.0, |commit| commit.validate_version(version))
+            .into()
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Diff {
     pub text: Option<AttachedText>,
     pub url: Option<Uri>,
 }
 
 impl Validate for Diff {
-    fn validate_with_context(
-        &self,
-        context: ValidationContext,
-    ) -> Result<ValidationResult, ValidationError> {
-        let mut results: Vec<ValidationResult> = vec![];
-
-        if let Some(text) = &self.text {
-            let context = context.extend_context_with_struct_field("Diff", "text");
-
-            results.push(text.validate_with_context(context)?);
-        }
-
-        if let Some(url) = &self.url {
-            let context = context.extend_context_with_struct_field("Diff", "url");
-
-            results.push(url.validate_with_context(context)?);
-        }
-
-        Ok(results
-            .into_iter()
-            .fold(ValidationResult::default(), |acc, result| acc.merge(result)))
+    fn validate_version(&self, version: SpecVersion) -> ValidationResult {
+        ValidationContext::new()
+            .add_struct_option("text", self.text.as_ref(), version)
+            .add_field_option("url", self.url.as_ref(), validate_uri)
+            .into()
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct IdentifiableAction {
     pub timestamp: Option<DateTime>,
     pub name: Option<NormalizedString>,
@@ -139,38 +83,16 @@ pub struct IdentifiableAction {
 }
 
 impl Validate for IdentifiableAction {
-    fn validate_with_context(
-        &self,
-        context: ValidationContext,
-    ) -> Result<ValidationResult, ValidationError> {
-        let mut results: Vec<ValidationResult> = vec![];
-
-        if let Some(timestamp) = &self.timestamp {
-            let context =
-                context.extend_context_with_struct_field("IdentifiableAction", "timestamp");
-
-            results.push(timestamp.validate_with_context(context)?);
-        }
-
-        if let Some(name) = &self.name {
-            let context = context.extend_context_with_struct_field("IdentifiableAction", "name");
-
-            results.push(name.validate_with_context(context)?);
-        }
-
-        if let Some(email) = &self.email {
-            let context = context.extend_context_with_struct_field("IdentifiableAction", "email");
-
-            results.push(email.validate_with_context(context)?);
-        }
-
-        Ok(results
-            .into_iter()
-            .fold(ValidationResult::default(), |acc, result| acc.merge(result)))
+    fn validate_version(&self, _version: SpecVersion) -> ValidationResult {
+        ValidationContext::new()
+            .add_field_option("timestamp", self.timestamp.as_ref(), validate_date_time)
+            .add_field_option("name", self.name.as_ref(), validate_normalized_string)
+            .add_field_option("email", self.email.as_ref(), validate_normalized_string)
+            .into()
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Issue {
     pub issue_type: IssueClassification,
     pub id: Option<NormalizedString>,
@@ -181,78 +103,47 @@ pub struct Issue {
 }
 
 impl Validate for Issue {
-    fn validate_with_context(
-        &self,
-        context: ValidationContext,
-    ) -> Result<ValidationResult, ValidationError> {
-        let mut results: Vec<ValidationResult> = vec![];
-
-        let issue_context = context.extend_context_with_struct_field("Issue", "issue_type");
-
-        results.push(self.issue_type.validate_with_context(issue_context)?);
-
-        if let Some(id) = &self.id {
-            let context = context.extend_context_with_struct_field("Issue", "id");
-
-            results.push(id.validate_with_context(context)?);
-        }
-
-        if let Some(name) = &self.name {
-            let context = context.extend_context_with_struct_field("Issue", "name");
-
-            results.push(name.validate_with_context(context)?);
-        }
-
-        if let Some(description) = &self.description {
-            let context = context.extend_context_with_struct_field("Issue", "description");
-
-            results.push(description.validate_with_context(context)?);
-        }
-
-        if let Some(source) = &self.source {
-            let context = context.extend_context_with_struct_field("Issue", "source");
-
-            results.push(source.validate_with_context(context)?);
-        }
-
-        if let Some(reference) = &self.references {
-            for (index, reference) in reference.iter().enumerate() {
-                let context = context.extend_context(vec![
-                    ValidationPathComponent::Struct {
-                        struct_name: "Issue".to_string(),
-                        field_name: "references".to_string(),
-                    },
-                    ValidationPathComponent::Array { index },
-                ]);
-                results.push(reference.validate_with_context(context)?);
-            }
-        }
-
-        Ok(results
-            .into_iter()
-            .fold(ValidationResult::default(), |acc, result| acc.merge(result)))
+    fn validate_version(&self, version: SpecVersion) -> ValidationResult {
+        ValidationContext::new()
+            .add_field(
+                "issue_type",
+                &self.issue_type,
+                validate_issue_classification,
+            )
+            .add_field_option("id", self.id.as_ref(), validate_normalized_string)
+            .add_field_option("name", self.name.as_ref(), validate_normalized_string)
+            .add_field_option(
+                "description",
+                self.description.as_ref(),
+                validate_normalized_string,
+            )
+            .add_struct_option("source", self.source.as_ref(), version)
+            .add_list_option("references", self.references.as_ref(), validate_uri)
+            .into()
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+pub fn validate_issue_classification(
+    classification: &IssueClassification,
+) -> Result<(), ValidationError> {
+    if matches!(
+        classification,
+        IssueClassification::UnknownIssueClassification(_)
+    ) {
+        return Err(ValidationError::new("Unknown issue classification"));
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, strum::Display, Hash)]
+#[strum(serialize_all = "snake_case")]
 pub enum IssueClassification {
     Defect,
     Enhancement,
     Security,
     #[doc(hidden)]
+    #[strum(default)]
     UnknownIssueClassification(String),
-}
-
-impl ToString for IssueClassification {
-    fn to_string(&self) -> String {
-        match self {
-            IssueClassification::Defect => "defect",
-            IssueClassification::Enhancement => "enhancement",
-            IssueClassification::Security => "security",
-            IssueClassification::UnknownIssueClassification(uic) => uic,
-        }
-        .to_string()
-    }
 }
 
 impl IssueClassification {
@@ -266,24 +157,7 @@ impl IssueClassification {
     }
 }
 
-impl Validate for IssueClassification {
-    fn validate_with_context(
-        &self,
-        context: ValidationContext,
-    ) -> Result<ValidationResult, ValidationError> {
-        match self {
-            IssueClassification::UnknownIssueClassification(_) => Ok(ValidationResult::Failed {
-                reasons: vec![FailureReason {
-                    message: "Unknown issue classification".to_string(),
-                    context,
-                }],
-            }),
-            _ => Ok(ValidationResult::Passed),
-        }
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Patch {
     pub patch_type: PatchClassification,
     pub diff: Option<Diff>,
@@ -291,83 +165,54 @@ pub struct Patch {
 }
 
 impl Validate for Patch {
-    fn validate_with_context(
-        &self,
-        context: ValidationContext,
-    ) -> Result<ValidationResult, ValidationError> {
-        let mut results: Vec<ValidationResult> = vec![];
-
-        let patch_type_context = context.extend_context_with_struct_field("Patch", "patch_type");
-
-        results.push(self.patch_type.validate_with_context(patch_type_context)?);
-
-        if let Some(diff) = &self.diff {
-            let context = context.extend_context_with_struct_field("Patch", "diff");
-
-            results.push(diff.validate_with_context(context)?);
-        }
-
-        if let Some(resolves) = &self.resolves {
-            for (index, resolve) in resolves.iter().enumerate() {
-                let context = context.extend_context(vec![
-                    ValidationPathComponent::Struct {
-                        struct_name: "Patch".to_string(),
-                        field_name: "resolves".to_string(),
-                    },
-                    ValidationPathComponent::Array { index },
-                ]);
-                results.push(resolve.validate_with_context(context)?);
-            }
-        }
-
-        Ok(results
-            .into_iter()
-            .fold(ValidationResult::default(), |acc, result| acc.merge(result)))
+    fn validate_version(&self, version: SpecVersion) -> ValidationResult {
+        ValidationContext::new()
+            .add_enum(
+                "patch_type",
+                &self.patch_type,
+                validate_patch_classification,
+            )
+            .add_struct_option("diff", self.diff.as_ref(), version)
+            .add_list_option("resolves", self.resolves.as_ref(), |issue| {
+                issue.validate_version(version)
+            })
+            .into()
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Patches(pub Vec<Patch>);
 
 impl Validate for Patches {
-    fn validate_with_context(
-        &self,
-        context: ValidationContext,
-    ) -> Result<ValidationResult, ValidationError> {
-        let mut results: Vec<ValidationResult> = vec![];
-
-        for (index, patch) in self.0.iter().enumerate() {
-            let context = context.extend_context(vec![ValidationPathComponent::Array { index }]);
-            results.push(patch.validate_with_context(context)?);
-        }
-
-        Ok(results
-            .into_iter()
-            .fold(ValidationResult::default(), |acc, result| acc.merge(result)))
+    fn validate_version(&self, version: SpecVersion) -> ValidationResult {
+        ValidationContext::new()
+            .add_list("inner", &self.0, |patch| patch.validate_version(version))
+            .into()
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+pub fn validate_patch_classification(
+    classification: &PatchClassification,
+) -> Result<(), ValidationError> {
+    if matches!(
+        classification,
+        PatchClassification::UnknownPatchClassification(_)
+    ) {
+        return Err("Unknown patch classification".into());
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, strum::Display, Hash)]
+#[strum(serialize_all = "kebab-case")]
 pub enum PatchClassification {
     Unofficial,
     Monkey,
     Backport,
     CherryPick,
     #[doc(hidden)]
+    #[strum(default)]
     UnknownPatchClassification(String),
-}
-
-impl ToString for PatchClassification {
-    fn to_string(&self) -> String {
-        match self {
-            PatchClassification::Unofficial => "unofficial",
-            PatchClassification::Monkey => "monkey",
-            PatchClassification::Backport => "backport",
-            PatchClassification::CherryPick => "cherry-pick",
-            PatchClassification::UnknownPatchClassification(upc) => upc,
-        }
-        .to_string()
-    }
 }
 
 impl PatchClassification {
@@ -382,57 +227,24 @@ impl PatchClassification {
     }
 }
 
-impl Validate for PatchClassification {
-    fn validate_with_context(
-        &self,
-        context: ValidationContext,
-    ) -> Result<ValidationResult, ValidationError> {
-        match self {
-            PatchClassification::UnknownPatchClassification(_) => Ok(ValidationResult::Failed {
-                reasons: vec![FailureReason {
-                    message: "Unknown patch classification".to_string(),
-                    context,
-                }],
-            }),
-            _ => Ok(ValidationResult::Passed),
-        }
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Source {
     pub name: Option<NormalizedString>,
     pub url: Option<Uri>,
 }
 
 impl Validate for Source {
-    fn validate_with_context(
-        &self,
-        context: ValidationContext,
-    ) -> Result<ValidationResult, ValidationError> {
-        let mut results: Vec<ValidationResult> = vec![];
-
-        if let Some(name) = &self.name {
-            let context = context.extend_context_with_struct_field("Source", "name");
-
-            results.push(name.validate_with_context(context)?);
-        }
-
-        if let Some(url) = &self.url {
-            let context = context.extend_context_with_struct_field("Source", "url");
-
-            results.push(url.validate_with_context(context)?);
-        }
-
-        Ok(results
-            .into_iter()
-            .fold(ValidationResult::default(), |acc, result| acc.merge(result)))
+    fn validate_version(&self, _version: SpecVersion) -> ValidationResult {
+        ValidationContext::new()
+            .add_field_option("name", self.name.as_ref(), validate_normalized_string)
+            .add_field_option("url", self.url.as_ref(), validate_uri)
+            .into()
     }
 }
 
 #[cfg(test)]
 mod test {
-    use crate::validation::FailureReason;
+    use crate::validation;
 
     use super::*;
     use pretty_assertions::assert_eq;
@@ -454,10 +266,9 @@ mod test {
             }),
             message: Some(NormalizedString("no_whitespace".to_string())),
         }])
-        .validate_with_context(ValidationContext::default())
-        .expect("Error while validating");
+        .validate();
 
-        assert_eq!(validation_result, ValidationResult::Passed);
+        assert!(validation_result.passed());
     }
 
     #[test]
@@ -477,141 +288,40 @@ mod test {
             }),
             message: Some(NormalizedString("spaces and\ttabs".to_string())),
         }])
-        .validate_with_context(ValidationContext::default())
-        .expect("Error while validating");
+        .validate();
 
         assert_eq!(
             validation_result,
-            ValidationResult::Failed {
-                reasons: vec![
-                    FailureReason {
-                        message:
+            validation::list(
+                "inner",
+                [(
+                    0,
+                    vec![
+                        validation::field(
+                            "uid",
                             "NormalizedString contains invalid characters \\r \\n \\t or \\r\\n"
-                                .to_string(),
-                        context: ValidationContext(vec![
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Commit".to_string(),
-                                field_name: "uid".to_string()
-                            }
-                        ])
-                    },
-                    FailureReason {
-                        message: "Uri does not conform to ISO 8601".to_string(),
-                        context: ValidationContext(vec![
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Commit".to_string(),
-                                field_name: "url".to_string()
-                            }
-                        ])
-                    },
-                    FailureReason {
-                        message: "DateTime does not conform to ISO 8601".to_string(),
-                        context: ValidationContext(vec![
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Commit".to_string(),
-                                field_name: "author".to_string()
-                            },
-                            ValidationPathComponent::Struct {
-                                struct_name: "IdentifiableAction".to_string(),
-                                field_name: "timestamp".to_string()
-                            }
-                        ])
-                    },
-                    FailureReason {
-                        message:
-                            "NormalizedString contains invalid characters \\r \\n \\t or \\r\\n"
-                                .to_string(),
-                        context: ValidationContext(vec![
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Commit".to_string(),
-                                field_name: "author".to_string()
-                            },
-                            ValidationPathComponent::Struct {
-                                struct_name: "IdentifiableAction".to_string(),
-                                field_name: "name".to_string()
-                            }
-                        ])
-                    },
-                    FailureReason {
-                        message:
-                            "NormalizedString contains invalid characters \\r \\n \\t or \\r\\n"
-                                .to_string(),
-                        context: ValidationContext(vec![
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Commit".to_string(),
-                                field_name: "author".to_string()
-                            },
-                            ValidationPathComponent::Struct {
-                                struct_name: "IdentifiableAction".to_string(),
-                                field_name: "email".to_string()
-                            }
-                        ])
-                    },
-                    FailureReason {
-                        message: "DateTime does not conform to ISO 8601".to_string(),
-                        context: ValidationContext(vec![
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Commit".to_string(),
-                                field_name: "committer".to_string()
-                            },
-                            ValidationPathComponent::Struct {
-                                struct_name: "IdentifiableAction".to_string(),
-                                field_name: "timestamp".to_string()
-                            }
-                        ])
-                    },
-                    FailureReason {
-                        message:
-                            "NormalizedString contains invalid characters \\r \\n \\t or \\r\\n"
-                                .to_string(),
-                        context: ValidationContext(vec![
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Commit".to_string(),
-                                field_name: "committer".to_string()
-                            },
-                            ValidationPathComponent::Struct {
-                                struct_name: "IdentifiableAction".to_string(),
-                                field_name: "name".to_string()
-                            }
-                        ])
-                    },
-                    FailureReason {
-                        message:
-                            "NormalizedString contains invalid characters \\r \\n \\t or \\r\\n"
-                                .to_string(),
-                        context: ValidationContext(vec![
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Commit".to_string(),
-                                field_name: "committer".to_string()
-                            },
-                            ValidationPathComponent::Struct {
-                                struct_name: "IdentifiableAction".to_string(),
-                                field_name: "email".to_string()
-                            }
-                        ])
-                    },
-                    FailureReason {
-                        message:
-                            "NormalizedString contains invalid characters \\r \\n \\t or \\r\\n"
-                                .to_string(),
-                        context: ValidationContext(vec![
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Commit".to_string(),
-                                field_name: "message".to_string()
-                            },
-                        ])
-                    },
-                ]
-            }
+                        ),
+                        validation::field("url", "Uri does not conform to RFC 3986"),
+                        validation::r#struct(
+                            "author",
+                            vec![
+                                validation::field("timestamp", "DateTime does not conform to ISO 8601"),
+                                validation::field("name", "NormalizedString contains invalid characters \\r \\n \\t or \\r\\n"),
+                                validation::field("email", "NormalizedString contains invalid characters \\r \\n \\t or \\r\\n")
+                            ]
+                        ),
+                        validation::r#struct(
+                            "committer",
+                            vec![
+                                validation::field("timestamp", "DateTime does not conform to ISO 8601"),
+                                validation::field("name", "NormalizedString contains invalid characters \\r \\n \\t or \\r\\n"),
+                                validation::field("email", "NormalizedString contains invalid characters \\r \\n \\t or \\r\\n"),
+                            ]
+                        ),
+                        validation::field("message", "NormalizedString contains invalid characters \\r \\n \\t or \\r\\n")
+                    ]
+                )]
+            )
         );
     }
 
@@ -639,10 +349,9 @@ mod test {
                 references: Some(vec![Uri("https://example.com".to_string())]),
             }]),
         }])
-        .validate_with_context(ValidationContext::default())
-        .expect("Error while validating");
+        .validate();
 
-        assert_eq!(validation_result, ValidationResult::Passed);
+        assert!(validation_result.passed());
     }
 
     #[test]
@@ -669,181 +378,60 @@ mod test {
                 references: Some(vec![Uri("invalid uri".to_string())]),
             }]),
         }])
-        .validate_with_context(ValidationContext::default())
-        .expect("Error while validating");
+        .validate();
 
         assert_eq!(
             validation_result,
-            ValidationResult::Failed {
-                reasons: vec![
-                    FailureReason {
-                        message: "Unknown patch classification".to_string(),
-                        context: ValidationContext(vec![
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Patch".to_string(),
-                                field_name: "patch_type".to_string()
-                            },
-                        ])
-                    },
-                    FailureReason {
-                        message:
-                            "NormalizedString contains invalid characters \\r \\n \\t or \\r\\n"
-                                .to_string(),
-                        context: ValidationContext(vec![
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Patch".to_string(),
-                                field_name: "diff".to_string()
-                            },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Diff".to_string(),
-                                field_name: "text".to_string()
-                            },
-                            ValidationPathComponent::Struct {
-                                struct_name: "AttachedText".to_string(),
-                                field_name: "content_type".to_string()
-                            }
-                        ])
-                    },
-                    FailureReason {
-                        message: "Uri does not conform to ISO 8601".to_string(),
-                        context: ValidationContext(vec![
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Patch".to_string(),
-                                field_name: "diff".to_string()
-                            },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Diff".to_string(),
-                                field_name: "url".to_string()
-                            },
-                        ])
-                    },
-                    FailureReason {
-                        message: "Unknown issue classification".to_string(),
-                        context: ValidationContext(vec![
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Patch".to_string(),
-                                field_name: "resolves".to_string()
-                            },
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Issue".to_string(),
-                                field_name: "issue_type".to_string()
-                            },
-                        ])
-                    },
-                    FailureReason {
-                        message:
-                            "NormalizedString contains invalid characters \\r \\n \\t or \\r\\n"
-                                .to_string(),
-                        context: ValidationContext(vec![
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Patch".to_string(),
-                                field_name: "resolves".to_string()
-                            },
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Issue".to_string(),
-                                field_name: "id".to_string()
-                            },
-                        ])
-                    },
-                    FailureReason {
-                        message:
-                            "NormalizedString contains invalid characters \\r \\n \\t or \\r\\n"
-                                .to_string(),
-                        context: ValidationContext(vec![
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Patch".to_string(),
-                                field_name: "resolves".to_string()
-                            },
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Issue".to_string(),
-                                field_name: "name".to_string()
-                            },
-                        ])
-                    },
-                    FailureReason {
-                        message:
-                            "NormalizedString contains invalid characters \\r \\n \\t or \\r\\n"
-                                .to_string(),
-                        context: ValidationContext(vec![
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Patch".to_string(),
-                                field_name: "resolves".to_string()
-                            },
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Issue".to_string(),
-                                field_name: "description".to_string()
-                            },
-                        ])
-                    },
-                    FailureReason {
-                        message:
-                            "NormalizedString contains invalid characters \\r \\n \\t or \\r\\n"
-                                .to_string(),
-                        context: ValidationContext(vec![
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Patch".to_string(),
-                                field_name: "resolves".to_string()
-                            },
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Issue".to_string(),
-                                field_name: "source".to_string()
-                            },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Source".to_string(),
-                                field_name: "name".to_string()
-                            },
-                        ])
-                    },
-                    FailureReason {
-                        message: "Uri does not conform to ISO 8601".to_string(),
-                        context: ValidationContext(vec![
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Patch".to_string(),
-                                field_name: "resolves".to_string()
-                            },
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Issue".to_string(),
-                                field_name: "source".to_string()
-                            },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Source".to_string(),
-                                field_name: "url".to_string()
-                            },
-                        ])
-                    },
-                    FailureReason {
-                        message: "Uri does not conform to ISO 8601".to_string(),
-                        context: ValidationContext(vec![
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Patch".to_string(),
-                                field_name: "resolves".to_string()
-                            },
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Issue".to_string(),
-                                field_name: "references".to_string()
-                            },
-                            ValidationPathComponent::Array { index: 0 }
-                        ])
-                    },
-                ]
-            }
+            validation::list(
+                "inner",
+                [(
+                    0,
+                    vec![
+                        validation::r#enum("patch_type", "Unknown patch classification"),
+                        validation::r#struct(
+                            "diff",
+                            vec![
+                                validation::r#struct(
+                                    "text",
+                                    vec![
+                                        validation::field(
+                                            "content_type",
+                                            "NormalizedString contains invalid characters \\r \\n \\t or \\r\\n"
+                                        )
+                                    ]
+                                ),
+                                validation::field("url", "Uri does not conform to RFC 3986")
+                            ]
+                        ),
+                        validation::list(
+                            "resolves",
+                            [(
+                                0,
+                                vec![
+                                    validation::field("issue_type", "Unknown issue classification"),
+                                    validation::field("id", "NormalizedString contains invalid characters \\r \\n \\t or \\r\\n"),
+                                    validation::field("name", "NormalizedString contains invalid characters \\r \\n \\t or \\r\\n"),
+                                    validation::field("description", "NormalizedString contains invalid characters \\r \\n \\t or \\r\\n"),
+                                    validation::r#struct(
+                                        "source",
+                                        vec![
+                                            validation::field(
+                                                "name",
+                                                "NormalizedString contains invalid characters \\r \\n \\t or \\r\\n",
+                                            ),
+                                            validation::field(
+                                                "url",
+                                                "Uri does not conform to RFC 3986",
+                                            )
+                                        ]
+                                    ),
+                                    validation::list("references", [(0, validation::custom("", ["Uri does not conform to RFC 3986"]))])
+                                ]
+                            )]
+                        )
+                    ]
+                )]
+            )
         );
     }
 }

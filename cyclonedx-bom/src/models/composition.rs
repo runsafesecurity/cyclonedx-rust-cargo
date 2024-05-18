@@ -16,83 +16,85 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-use crate::validation::{
-    FailureReason, Validate, ValidationContext, ValidationError, ValidationPathComponent,
-    ValidationResult,
+use crate::validation::{Validate, ValidationContext, ValidationError, ValidationResult};
+
+use super::{
+    bom::{BomReference, SpecVersion},
+    signature::Signature,
 };
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Composition {
+    pub bom_ref: Option<BomReference>,
     pub aggregate: AggregateType,
     pub assemblies: Option<Vec<BomReference>>,
     pub dependencies: Option<Vec<BomReference>>,
+    pub vulnerabilities: Option<Vec<BomReference>>,
+    pub signature: Option<Signature>,
 }
 
 impl Validate for Composition {
-    fn validate_with_context(
-        &self,
-        context: ValidationContext,
-    ) -> Result<ValidationResult, ValidationError> {
-        let mut results: Vec<ValidationResult> = vec![];
-
-        let aggregate_context =
-            context.extend_context_with_struct_field("Composition", "aggregate");
-
-        results.push(self.aggregate.validate_with_context(aggregate_context)?);
-
-        Ok(results
-            .into_iter()
-            .fold(ValidationResult::default(), |acc, result| acc.merge(result)))
+    fn validate_version(&self, version: SpecVersion) -> ValidationResult {
+        ValidationContext::new()
+            .add_field("aggregate", &self.aggregate, |at| {
+                validate_aggregate_type(at, version)
+            })
+            .add_struct_option("signature", self.signature.as_ref(), version)
+            .into()
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Compositions(pub Vec<Composition>);
 
 impl Validate for Compositions {
-    fn validate_with_context(
-        &self,
-        context: ValidationContext,
-    ) -> Result<ValidationResult, ValidationError> {
-        let mut results: Vec<ValidationResult> = vec![];
-
-        for (index, composition) in self.0.iter().enumerate() {
-            let composition_context =
-                context.extend_context(vec![ValidationPathComponent::Array { index }]);
-            results.push(composition.validate_with_context(composition_context)?);
-        }
-
-        Ok(results
-            .into_iter()
-            .fold(ValidationResult::default(), |acc, result| acc.merge(result)))
+    fn validate_version(&self, version: SpecVersion) -> ValidationResult {
+        ValidationContext::new()
+            .add_list("composition", &self.0, |composition| {
+                composition.validate_version(version)
+            })
+            .into()
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+/// Validates the given [`AggregateType`].
+pub fn validate_aggregate_type(
+    aggregate_type: &AggregateType,
+    version: SpecVersion,
+) -> Result<(), ValidationError> {
+    if version <= SpecVersion::V1_4 {
+        if AggregateType::IncompleteFirstPartyProprietaryOnly < *aggregate_type {
+            return Err("Unknown aggregate type".into());
+        }
+    } else if version <= SpecVersion::V1_5
+        && matches!(aggregate_type, AggregateType::UnknownAggregateType(_))
+    {
+        return Err(ValidationError::new("Unknown aggregate type"));
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, strum::Display)]
+#[strum(serialize_all = "snake_case")]
+#[repr(u16)]
 pub enum AggregateType {
-    Complete,
-    Incomplete,
-    IncompleteFirstPartyOnly,
-    IncompleteThirdPartyOnly,
-    Unknown,
-    NotSpecified,
+    Complete = 1,
+    Incomplete = 2,
+    IncompleteFirstPartyOnly = 3,
+    IncompleteThirdPartyOnly = 4,
+    Unknown = 5,
+    NotSpecified = 6,
+    /// Added in 1.5
+    IncompleteFirstPartyProprietaryOnly = 7,
+    /// Added in 1.5
+    IncompleteFirstPartyOpensourceOnly = 8,
+    /// Added in 1.5
+    IncompleteThirdPartyProprietaryOnly = 9,
+    /// Added in 1.5
+    IncompleteThirdPartyOpensourceOnly = 10,
     #[doc(hidden)]
+    #[strum(default)]
     UnknownAggregateType(String),
-}
-
-impl ToString for AggregateType {
-    fn to_string(&self) -> String {
-        match self {
-            AggregateType::Complete => "complete",
-            AggregateType::Incomplete => "incomplete",
-            AggregateType::IncompleteFirstPartyOnly => "incomplete_first_party_only",
-            AggregateType::IncompleteThirdPartyOnly => "incomplete_third_party_only",
-            AggregateType::Unknown => "unknown",
-            AggregateType::NotSpecified => "not_specified",
-            AggregateType::UnknownAggregateType(uat) => uat,
-        }
-        .to_string()
-    }
 }
 
 impl AggregateType {
@@ -101,7 +103,11 @@ impl AggregateType {
             "complete" => Self::Complete,
             "incomplete" => Self::Incomplete,
             "incomplete_first_party_only" => Self::IncompleteFirstPartyOnly,
+            "incomplete_first_party_propprietary_only" => Self::IncompleteFirstPartyProprietaryOnly,
+            "incomplete_first_party_opensource_only" => Self::IncompleteFirstPartyOpensourceOnly,
             "incomplete_third_party_only" => Self::IncompleteThirdPartyOnly,
+            "incomplete_third_party_proprietary_only" => Self::IncompleteThirdPartyProprietaryOnly,
+            "incomplete_third_party_opensource_only" => Self::IncompleteThirdPartyOpensourceOnly,
             "unknown" => Self::Unknown,
             "not_specified" => Self::NotSpecified,
             unknown => Self::UnknownAggregateType(unknown.to_string()),
@@ -109,68 +115,49 @@ impl AggregateType {
     }
 }
 
-impl Validate for AggregateType {
-    fn validate_with_context(
-        &self,
-        context: ValidationContext,
-    ) -> Result<ValidationResult, ValidationError> {
-        match self {
-            AggregateType::UnknownAggregateType(_) => Ok(ValidationResult::Failed {
-                reasons: vec![FailureReason {
-                    message: "Unknown aggregate type".to_string(),
-                    context,
-                }],
-            }),
-            _ => Ok(ValidationResult::Passed),
-        }
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub struct BomReference(pub(crate) String);
-
 #[cfg(test)]
 mod test {
+    use crate::{models::signature::Algorithm, validation};
+
     use super::*;
     use pretty_assertions::assert_eq;
 
     #[test]
     fn it_should_pass_validation() {
         let validation_result = Compositions(vec![Composition {
+            bom_ref: Some(BomReference::new("composition-1")),
             aggregate: AggregateType::Complete,
-            assemblies: Some(vec![BomReference("reference".to_string())]),
-            dependencies: Some(vec![BomReference("reference".to_string())]),
+            assemblies: Some(vec![BomReference::new("assembly-ref")]),
+            dependencies: Some(vec![BomReference::new("dependency-ref")]),
+            vulnerabilities: Some(vec![BomReference::new("vulnerability-ref")]),
+            signature: Some(Signature::single(Algorithm::HS512, "abcdefgh")),
         }])
-        .validate()
-        .expect("Error while validating");
+        .validate();
 
-        assert_eq!(validation_result, ValidationResult::Passed);
+        assert!(validation_result.passed());
     }
 
     #[test]
     fn it_should_fail_validation() {
         let validation_result = Compositions(vec![Composition {
+            bom_ref: Some(BomReference::new("composition-1")),
             aggregate: AggregateType::UnknownAggregateType("unknown aggregate type".to_string()),
-            assemblies: Some(vec![BomReference("reference".to_string())]),
-            dependencies: Some(vec![BomReference("reference".to_string())]),
+            assemblies: Some(vec![BomReference::new("assembly-ref")]),
+            dependencies: Some(vec![BomReference::new("dependency-ref")]),
+            vulnerabilities: Some(vec![BomReference::new("vulnerability-ref")]),
+            signature: Some(Signature::single(Algorithm::HS512, "abcdefgh")),
         }])
-        .validate()
-        .expect("Error while validating");
+        .validate();
 
         assert_eq!(
             validation_result,
-            ValidationResult::Failed {
-                reasons: vec![FailureReason {
-                    message: "Unknown aggregate type".to_string(),
-                    context: ValidationContext(vec![
-                        ValidationPathComponent::Array { index: 0 },
-                        ValidationPathComponent::Struct {
-                            struct_name: "Composition".to_string(),
-                            field_name: "aggregate".to_string()
-                        }
-                    ])
-                }]
-            }
+            validation::list(
+                "composition",
+                [(
+                    0,
+                    validation::r#field("aggregate", "Unknown aggregate type")
+                )]
+            )
         );
     }
 }

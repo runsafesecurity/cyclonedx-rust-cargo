@@ -22,13 +22,7 @@ fn manifest_doesnt_exist() -> Result<(), Box<dyn std::error::Error>> {
     let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME"))?;
     cmd.current_dir(tmp_dir.path()).arg("cyclonedx");
 
-    cmd.assert()
-        .failure()
-        .stdout("")
-        .stderr(predicate::str::contains(format!(
-            "Error: failed to read `{}`",
-            tmp_dir.path().join("Cargo.toml").display(),
-        )));
+    cmd.assert().failure().stdout("");
 
     tmp_dir.close()?;
 
@@ -46,13 +40,7 @@ fn manifest_is_invalid() -> Result<(), Box<dyn std::error::Error>> {
         .arg("--manifest-path")
         .arg(tmp_file.path());
 
-    cmd.assert()
-        .failure()
-        .stdout("")
-        .stderr(predicate::str::contains(format!(
-            "Error: failed to parse manifest at `{}`",
-            tmp_file.path().display(),
-        )));
+    cmd.assert().failure().stdout("");
 
     tmp_file.close()?;
 
@@ -66,7 +54,8 @@ fn find_content_in_bom_files() -> Result<(), Box<dyn std::error::Error>> {
 
     cmd.current_dir(tmp_dir.path())
         .arg("cyclonedx")
-        .arg("--top-level");
+        .arg("--top-level")
+        .arg("--override-filename=bom");
 
     cmd.assert().success().stdout("");
 
@@ -106,7 +95,7 @@ fn find_content_in_stderr() -> Result<(), Box<dyn std::error::Error>> {
 
     let license = "TEST";
     let pkg_dir = tmp_dir.child(pkg_name);
-    pkg_dir.child("src/main.rs").touch()?;
+    pkg_dir.child("src/lib.rs").touch()?;
 
     pkg_dir.child("Cargo.toml").write_str(&format!(
         r#"
@@ -123,49 +112,21 @@ fn find_content_in_stderr() -> Result<(), Box<dyn std::error::Error>> {
     cmd.current_dir(tmp_dir.path())
         .arg("cyclonedx")
         .arg("--all")
+        .arg("--license-strict")
         .arg("--verbose");
 
     cmd.assert()
         .success()
         .stderr(predicate::str::contains(format!(
-            "Outputting {}",
-            tmp_dir.path().join("bom.xml").display(),
-        )))
-        .stderr(predicate::str::contains(format!(
-            "Package {} has an invalid license expression, trying lax parsing ({})",
+            "Package {} has an invalid license expression ({}), using as named license: Invalid SPDX expression: unknown term",
             pkg_name, license,
         )));
 
     let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME"))?;
 
-    cmd.current_dir(tmp_dir.path())
-        .arg("cyclonedx")
-        .arg("--quiet");
-
-    cmd.assert().success().stdout("").stderr("");
-
-    tmp_dir.close()?;
-
-    Ok(())
-}
-
-#[test]
-fn bom_file_name_extension_is_prepended_with_cdx() -> Result<(), Box<dyn std::error::Error>> {
-    let tmp_dir = make_temp_rust_project()?;
-
-    let mut cmd = Command::cargo_bin(env!("CARGO_PKG_NAME"))?;
-
-    cmd.current_dir(tmp_dir.path())
-        .arg("cyclonedx")
-        .arg("--output-cdx");
+    cmd.current_dir(tmp_dir.path()).arg("cyclonedx").arg("-qq");
 
     cmd.assert().success().stdout("");
-
-    tmp_dir.child("bom.xml").assert(predicate::path::missing());
-
-    tmp_dir
-        .child("bom.cdx.xml")
-        .assert(predicate::path::exists());
 
     tmp_dir.close()?;
 

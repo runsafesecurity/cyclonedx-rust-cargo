@@ -16,14 +16,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-use crate::validation::{
-    FailureReason, Validate, ValidationContext, ValidationError, ValidationResult,
-};
+use crate::validation::ValidationError;
+use std::fmt::Display;
+use std::ops::Deref;
 
 /// A string that does not contain carriage return, line feed, or tab characters
 ///
 /// Defined via the [XML schema](https://www.w3.org/TR/xmlschema-2/#normalizedString)
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct NormalizedString(pub(crate) String);
 
 impl NormalizedString {
@@ -45,39 +45,64 @@ impl NormalizedString {
     }
 }
 
-impl ToString for NormalizedString {
-    fn to_string(&self) -> String {
-        self.0.clone()
+impl From<&str> for NormalizedString {
+    fn from(input: &str) -> Self {
+        NormalizedString::new(input)
     }
 }
 
-impl Validate for NormalizedString {
-    fn validate_with_context(
-        &self,
-        context: ValidationContext,
-    ) -> Result<ValidationResult, ValidationError> {
-        if self.0.contains("\r\n")
-            || self.0.contains('\r')
-            || self.0.contains('\n')
-            || self.0.contains('\t')
-        {
-            return Ok(ValidationResult::Failed {
-                reasons: vec![FailureReason {
-                    message: "NormalizedString contains invalid characters \\r \\n \\t or \\r\\n"
-                        .to_string(),
-                    context,
-                }],
-            });
-        }
-
-        Ok(ValidationResult::Passed)
+impl From<NormalizedString> for String {
+    fn from(value: NormalizedString) -> Self {
+        value.0
     }
+}
+
+impl Deref for NormalizedString {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl AsRef<NormalizedString> for NormalizedString {
+    fn as_ref(&self) -> &NormalizedString {
+        self
+    }
+}
+
+impl AsRef<str> for NormalizedString {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Display for NormalizedString {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// Validates a [`NormalizedString`].
+pub fn validate_normalized_string(
+    normalized_string: &NormalizedString,
+) -> Result<(), ValidationError> {
+    if normalized_string.contains("\r\n")
+        || normalized_string.contains('\r')
+        || normalized_string.contains('\n')
+        || normalized_string.contains('\t')
+    {
+        return Err(ValidationError::new(
+            "NormalizedString contains invalid characters \\r \\n \\t or \\r\\n",
+        ));
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::validation::FailureReason;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -98,28 +123,18 @@ mod test {
 
     #[test]
     fn it_should_pass_validation() {
-        let validation_result = NormalizedString("no_whitespace".to_string())
-            .validate_with_context(ValidationContext::default())
-            .expect("Error while validating");
-
-        assert_eq!(validation_result, ValidationResult::Passed);
+        assert!(validate_normalized_string(&NormalizedString("no_whitespace".to_string())).is_ok());
     }
 
     #[test]
     fn it_should_fail_validation() {
-        let validation_result = NormalizedString("spaces and\ttabs".to_string())
-            .validate_with_context(ValidationContext::default())
-            .expect("Error while validating");
+        let result = validate_normalized_string(&NormalizedString("spaces and\ttabs".to_string()));
 
         assert_eq!(
-            validation_result,
-            ValidationResult::Failed {
-                reasons: vec![FailureReason {
-                    message: "NormalizedString contains invalid characters \\r \\n \\t or \\r\\n"
-                        .to_string(),
-                    context: ValidationContext::default()
-                }]
-            }
+            result,
+            Err(ValidationError::new(
+                "NormalizedString contains invalid characters \\r \\n \\t or \\r\\n",
+            ))
         );
     }
 }

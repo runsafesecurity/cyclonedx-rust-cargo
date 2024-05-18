@@ -16,9 +16,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#![deny(clippy::all)]
-#![deny(warnings)]
-
 //! The `cyclonedx-bom` library provides JSON and XML serialization and derserialization of Software
 //! Bill-of-Materials (SBOM) files.
 //!
@@ -49,8 +46,8 @@
 //! }"#;
 //! let bom = Bom::parse_from_json_v1_3(bom_json.as_bytes()).expect("Failed to parse BOM");
 //!
-//! let validation_result = bom.validate().expect("Failed to validate BOM");
-//! assert_eq!(validation_result, ValidationResult::Passed);
+//! let validation_result = bom.validate();
+//! assert!(validation_result.passed());
 //! ```
 //!
 //! ## Create and output an SBOM
@@ -70,7 +67,7 @@
 //!             .expect("Failed to create UrnUuid"),
 //!     ),
 //!     metadata: Some(Metadata {
-//!         tools: Some(Tools(vec![Tool {
+//!         tools: Some(Tools::List(vec![Tool {
 //!             name: Some(NormalizedString::new("my_tool")),
 //!             ..Tool::default()
 //!         }])),
@@ -129,6 +126,7 @@ pub mod errors;
 pub mod external_models;
 pub mod models;
 pub mod prelude;
+pub mod schema;
 pub mod validation;
 
 mod specs;

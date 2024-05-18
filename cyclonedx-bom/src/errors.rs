@@ -16,6 +16,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+use std::convert::Infallible;
+
+use xml::name::OwnedName;
+
+use crate::models::bom::SpecVersion;
+
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum BomError {
@@ -24,6 +30,20 @@ pub enum BomError {
 
     #[error("Failed to serialize BOM to XML: {0}")]
     XmlSerializationError(String),
+
+    #[error("Failed to serialize BOM with version {0:?}: {1}")]
+    BomSerializationError(SpecVersion, String),
+
+    #[error("Unsupported Spec Version '{0}'")]
+    UnsupportedSpecVersion(String),
+}
+
+// This allows to use `TryFrom` when a type only implements `From` inside a
+// `TryFrom<Error = BomError>` implementation.
+impl From<Infallible> for BomError {
+    fn from(err: Infallible) -> Self {
+        match err {}
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -33,6 +53,11 @@ pub enum JsonWriteError {
     JsonElementWriteError {
         #[from]
         error: serde_json::Error,
+    },
+    #[error("Failed to convert Bom: {error}")]
+    BomError {
+        #[from]
+        error: BomError,
     },
 }
 
@@ -45,15 +70,25 @@ pub enum XmlWriteError {
         error: xml::writer::Error,
         element: String,
     },
+    #[error("Failed to convert Bom: {error}")]
+    BomError {
+        #[from]
+        error: BomError,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum JsonReadError {
     #[error("Failed to deserialize JSON: {error}")]
-    JsonElementWriteError {
+    JsonElementReadError {
         #[from]
         error: serde_json::Error,
+    },
+    #[error("Invalid input format found: {error}")]
+    BomError {
+        #[from]
+        error: BomError,
     },
 }
 
@@ -75,6 +110,9 @@ pub enum XmlReadError {
         element: String,
     },
 
+    #[error("Required attribute {attribute} not found in element {element}")]
+    RequiredAttributeMissing { attribute: String, element: String },
+
     #[error("Could not parse {value} as {data_type} on {element}")]
     InvalidParseError {
         value: String,
@@ -89,4 +127,13 @@ pub enum XmlReadError {
         expected_namespace: String,
         actual_namespace: Option<String>,
     },
+}
+
+impl XmlReadError {
+    pub fn required_data_missing(required_field: &str, element: &OwnedName) -> Self {
+        Self::RequiredDataMissing {
+            required_field: required_field.to_string(),
+            element: element.local_name.to_string(),
+        }
+    }
 }

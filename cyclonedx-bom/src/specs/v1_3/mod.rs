@@ -16,17 +16,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-pub(crate) mod attached_text;
-pub(crate) mod bom;
-pub(crate) mod code;
-pub(crate) mod component;
-pub(crate) mod composition;
-pub(crate) mod dependency;
-pub(crate) mod external_reference;
-pub(crate) mod hash;
-pub(crate) mod license;
-pub(crate) mod metadata;
-pub(crate) mod organization;
-pub(crate) mod property;
-pub(crate) mod service;
-pub(crate) mod tool;
+pub(crate) use crate::specs::common::bom::v1_3 as bom;
+pub(crate) use crate::specs::common::component::v1_3 as component;
+pub(crate) use crate::specs::common::composition::v1_3 as composition;
+pub(crate) use crate::specs::common::external_reference::v1_3 as external_reference;
+pub(crate) use crate::specs::common::license::v1_3 as license;
+pub(crate) use crate::specs::common::metadata::v1_3 as metadata;
+pub(crate) use crate::specs::common::service::v1_3 as service;
+pub(crate) use crate::specs::common::tool::v1_3 as tool;

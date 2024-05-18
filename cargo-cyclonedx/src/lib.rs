@@ -16,12 +16,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#![deny(clippy::all)]
-#![deny(warnings)]
-
 pub mod config;
 pub mod format;
 pub mod generator;
-pub mod toml;
+pub mod platform;
+pub mod purl;
+pub mod urlencode;
 
 pub use crate::generator::*;

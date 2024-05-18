@@ -16,17 +16,33 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+pub mod advisory;
+pub mod annotation;
 pub mod attached_text;
+pub mod attachment;
 pub mod bom;
 pub mod code;
 pub mod component;
+pub mod component_data;
 pub mod composition;
+pub mod data_governance;
 pub mod dependency;
 pub mod external_reference;
+pub mod formulation;
 pub mod hash;
 pub mod license;
+pub mod lifecycle;
 pub mod metadata;
+pub mod modelcard;
 pub mod organization;
 pub mod property;
 pub mod service;
+pub mod signature;
 pub mod tool;
+pub mod vulnerability;
+pub mod vulnerability_analysis;
+pub mod vulnerability_credits;
+pub mod vulnerability_rating;
+pub mod vulnerability_reference;
+pub mod vulnerability_source;
+pub mod vulnerability_target;

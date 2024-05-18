@@ -17,25 +17,35 @@
  */
 
 use once_cell::sync::Lazy;
+use ordered_float::OrderedFloat;
 use regex::Regex;
+use std::fmt::Formatter;
 
+use crate::external_models::normalized_string::validate_normalized_string;
+use crate::external_models::uri::{validate_purl, validate_uri as validate_url};
 use crate::models::attached_text::AttachedText;
+use crate::models::bom::BomReference;
 use crate::models::code::{Commits, Patches};
 use crate::models::external_reference::ExternalReferences;
 use crate::models::hash::Hashes;
 use crate::models::license::Licenses;
 use crate::models::organization::OrganizationalEntity;
 use crate::models::property::Properties;
-use crate::validation::{FailureReason, ValidationPathComponent};
+use crate::validation::ValidationError;
 use crate::{
     external_models::{
         normalized_string::NormalizedString,
-        uri::{Purl, Uri},
+        uri::{Purl, Uri as Url},
     },
-    validation::{Validate, ValidationContext, ValidationError, ValidationResult},
+    validation::{Validate, ValidationContext, ValidationResult},
 };
 
-#[derive(Debug, PartialEq, Eq)]
+use super::bom::{validate_bom_ref, SpecVersion};
+use super::component_data::ComponentData;
+use super::modelcard::ModelCard;
+use super::signature::Signature;
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Component {
     pub component_type: Classification,
     pub mime_type: Option<MimeType>,
@@ -45,7 +55,7 @@ pub struct Component {
     pub publisher: Option<NormalizedString>,
     pub group: Option<NormalizedString>,
     pub name: NormalizedString,
-    pub version: NormalizedString,
+    pub version: Option<NormalizedString>,
     pub description: Option<NormalizedString>,
     pub scope: Option<Scope>,
     pub hashes: Option<Hashes>,
@@ -60,6 +70,12 @@ pub struct Component {
     pub properties: Option<Properties>,
     pub components: Option<Components>,
     pub evidence: Option<ComponentEvidence>,
+    /// Added in version 1.4
+    pub signature: Option<Signature>,
+    /// Added in version 1.5
+    pub model_card: Option<ModelCard>,
+    /// Added in version 1.5
+    pub data: Option<ComponentData>,
 }
 
 impl Component {
@@ -72,7 +88,7 @@ impl Component {
         Self {
             component_type,
             name: NormalizedString::new(name),
-            version: NormalizedString::new(version),
+            version: Some(NormalizedString::new(version)),
             bom_ref,
             mime_type: None,
             supplier: None,
@@ -93,198 +109,112 @@ impl Component {
             properties: None,
             components: None,
             evidence: None,
+            signature: None,
+            model_card: None,
+            data: None,
         }
     }
 }
 
 impl Validate for Component {
-    fn validate_with_context(
-        &self,
-        context: ValidationContext,
-    ) -> Result<ValidationResult, ValidationError> {
-        let mut results: Vec<ValidationResult> = vec![];
-
-        let component_type_context =
-            context.extend_context_with_struct_field("Component", "component_type");
-
-        results.push(
-            self.component_type
-                .validate_with_context(component_type_context)?,
+    fn validate_version(&self, version: SpecVersion) -> ValidationResult {
+        let mut ctx = ValidationContext::new();
+        ctx.add_field("component_type", &self.component_type, |ct| {
+            validate_classification(ct, version)
+        });
+        ctx.add_field_option("mime_type", self.mime_type.as_ref(), validate_mime_type);
+        ctx.add_struct_option("supplier", self.supplier.as_ref(), version);
+        ctx.add_field_option("author", self.author.as_ref(), validate_normalized_string);
+        ctx.add_field_option(
+            "publisher",
+            self.publisher.as_ref(),
+            validate_normalized_string,
         );
-
-        if let Some(mime_type) = &self.mime_type {
-            let context = context.extend_context_with_struct_field("Component", "mime_type");
-
-            results.push(mime_type.validate_with_context(context)?);
-        }
-
-        if let Some(supplier) = &self.supplier {
-            let context = context.extend_context_with_struct_field("Component", "supplier");
-
-            results.push(supplier.validate_with_context(context)?);
-        }
-
-        if let Some(author) = &self.author {
-            let context = context.extend_context_with_struct_field("Component", "author");
-
-            results.push(author.validate_with_context(context)?);
-        }
-
-        if let Some(publisher) = &self.publisher {
-            let context = context.extend_context_with_struct_field("Component", "publisher");
-
-            results.push(publisher.validate_with_context(context)?);
-        }
-
-        if let Some(group) = &self.group {
-            let context = context.extend_context_with_struct_field("Component", "group");
-
-            results.push(group.validate_with_context(context)?);
-        }
-
-        let name_context = context.extend_context_with_struct_field("Component", "name");
-
-        results.push(self.name.validate_with_context(name_context)?);
-
-        let version_context = context.extend_context_with_struct_field("Component", "version");
-
-        results.push(self.version.validate_with_context(version_context)?);
-
-        if let Some(description) = &self.description {
-            let context = context.extend_context_with_struct_field("Component", "description");
-
-            results.push(description.validate_with_context(context)?);
-        }
-
-        if let Some(scope) = &self.scope {
-            let context = context.extend_context_with_struct_field("Component", "scope");
-
-            results.push(scope.validate_with_context(context)?);
-        }
-
-        if let Some(hashes) = &self.hashes {
-            let context = context.extend_context_with_struct_field("Component", "hashes");
-
-            results.push(hashes.validate_with_context(context)?);
-        }
-
-        if let Some(licenses) = &self.licenses {
-            let context = context.extend_context_with_struct_field("Component", "licenses");
-
-            results.push(licenses.validate_with_context(context)?);
-        }
-
-        if let Some(copyright) = &self.copyright {
-            let context = context.extend_context_with_struct_field("Component", "copyright");
-
-            results.push(copyright.validate_with_context(context)?);
-        }
-
-        if let Some(cpe) = &self.cpe {
-            let context = context.extend_context_with_struct_field("Component", "cpe");
-
-            results.push(cpe.validate_with_context(context)?);
-        }
-
-        if let Some(purl) = &self.purl {
-            let context = context.extend_context_with_struct_field("Component", "purl");
-
-            results.push(purl.validate_with_context(context)?);
-        }
-
-        if let Some(swid) = &self.swid {
-            let context = context.extend_context_with_struct_field("Component", "swid");
-
-            results.push(swid.validate_with_context(context)?);
-        }
-
-        if let Some(pedigree) = &self.pedigree {
-            let context = context.extend_context_with_struct_field("Component", "pedigree");
-
-            results.push(pedigree.validate_with_context(context)?);
-        }
-
-        if let Some(external_references) = &self.external_references {
-            let context =
-                context.extend_context_with_struct_field("Component", "external_references");
-
-            results.push(external_references.validate_with_context(context)?);
-        }
-
-        if let Some(properties) = &self.properties {
-            let context = context.extend_context_with_struct_field("Component", "properties");
-
-            results.push(properties.validate_with_context(context)?);
-        }
-
-        if let Some(components) = &self.components {
-            let context = context.extend_context_with_struct_field("Component", "components");
-
-            results.push(components.validate_with_context(context)?);
-        }
-
-        if let Some(evidence) = &self.evidence {
-            let context = context.extend_context_with_struct_field("Component", "evidence");
-
-            results.push(evidence.validate_with_context(context)?);
-        }
-
-        Ok(results
-            .into_iter()
-            .fold(ValidationResult::default(), |acc, result| acc.merge(result)))
+        ctx.add_field_option("group", self.group.as_ref(), validate_normalized_string);
+        ctx.add_field("name", &self.name, validate_normalized_string);
+        ctx.add_field_option("version", self.version.as_ref(), validate_normalized_string);
+        ctx.add_field_option(
+            "description",
+            self.description.as_ref(),
+            validate_normalized_string,
+        );
+        ctx.add_enum_option("scope", self.scope.as_ref(), validate_scope);
+        ctx.add_struct_option("hashes", self.hashes.as_ref(), version);
+        ctx.add_struct_option("licenses", self.licenses.as_ref(), version);
+        ctx.add_field_option(
+            "copyright",
+            self.copyright.as_ref(),
+            validate_normalized_string,
+        );
+        ctx.add_field_option("cpe", self.cpe.as_ref(), validate_cpe);
+        ctx.add_field_option("purl", self.purl.as_ref(), validate_purl);
+        ctx.add_struct_option("swid", self.swid.as_ref(), version);
+        ctx.add_struct_option("pedigree", self.pedigree.as_ref(), version);
+        ctx.add_struct_option(
+            "external_references",
+            self.external_references.as_ref(),
+            version,
+        );
+        ctx.add_struct_option("properties", self.properties.as_ref(), version);
+        ctx.add_struct_option("components", self.components.as_ref(), version);
+        ctx.add_struct_option("evidence", self.evidence.as_ref(), version);
+        ctx.into()
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Components(pub Vec<Component>);
 
 impl Validate for Components {
-    fn validate_with_context(
-        &self,
-        context: ValidationContext,
-    ) -> Result<ValidationResult, ValidationError> {
-        let mut results: Vec<ValidationResult> = vec![];
-
-        for (index, component) in self.0.iter().enumerate() {
-            let context = context.extend_context(vec![ValidationPathComponent::Array { index }]);
-            results.push(component.validate_with_context(context)?);
-        }
-
-        Ok(results
-            .into_iter()
-            .fold(ValidationResult::default(), |acc, result| acc.merge(result)))
+    fn validate_version(&self, version: SpecVersion) -> ValidationResult {
+        ValidationContext::new()
+            .add_list("inner", &self.0, |component| {
+                component.validate_version(version)
+            })
+            .into()
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+/// Checks the given [`Classification`] is valid.
+pub fn validate_classification(
+    classification: &Classification,
+    version: SpecVersion,
+) -> Result<(), ValidationError> {
+    if SpecVersion::V1_3 <= version && version <= SpecVersion::V1_4 {
+        if Classification::File < *classification {
+            return Err(ValidationError::new("Unknown classification"));
+        }
+    } else if SpecVersion::V1_5 <= version
+        && matches!(classification, Classification::UnknownClassification(_))
+    {
+        return Err(ValidationError::new("Unknown classification"));
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, strum::Display, Hash)]
+#[strum(serialize_all = "kebab-case")]
+#[repr(u16)]
 pub enum Classification {
-    Application,
-    Framework,
-    Library,
-    Container,
-    OperatingSystem,
-    Device,
-    Firmware,
-    File,
+    Application = 1,
+    Framework = 2,
+    Library = 3,
+    Container = 4,
+    OperatingSystem = 5,
+    Device = 6,
+    Firmware = 7,
+    File = 8,
+    /// Added in 1.5
+    Platform = 9,
+    /// Added in 1.5
+    DeviceDriver = 10,
+    /// Added in 1.5
+    MachineLearningModel = 11,
+    /// Added in 1.5
+    Data = 12,
     #[doc(hidden)]
+    #[strum(default)]
     UnknownClassification(String),
-}
-
-impl ToString for Classification {
-    fn to_string(&self) -> String {
-        match self {
-            Classification::Application => "application",
-            Classification::Framework => "framework",
-            Classification::Library => "library",
-            Classification::Container => "container",
-            Classification::OperatingSystem => "operating-system",
-            Classification::Device => "device",
-            Classification::Firmware => "firmware",
-            Classification::File => "file",
-            Classification::UnknownClassification(uc) => uc,
-        }
-        .to_string()
-    }
 }
 
 impl Classification {
@@ -298,47 +228,31 @@ impl Classification {
             "device" => Self::Device,
             "firmware" => Self::Firmware,
             "file" => Self::File,
+            "platform" => Self::Platform,
+            "device-driver" => Self::DeviceDriver,
+            "machine-learning-model" => Self::MachineLearningModel,
+            "data" => Self::Data,
             unknown => Self::UnknownClassification(unknown.to_string()),
         }
     }
 }
 
-impl Validate for Classification {
-    fn validate_with_context(
-        &self,
-        context: ValidationContext,
-    ) -> Result<ValidationResult, ValidationError> {
-        match self {
-            Classification::UnknownClassification(_) => Ok(ValidationResult::Failed {
-                reasons: vec![FailureReason {
-                    message: "Unknown classification".to_string(),
-                    context,
-                }],
-            }),
-            _ => Ok(ValidationResult::Passed),
-        }
+pub fn validate_scope(scope: &Scope) -> Result<(), ValidationError> {
+    if matches!(scope, Scope::UnknownScope(_)) {
+        return Err(ValidationError::new("Unknown scope"));
     }
+    Ok(())
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, strum::Display, Hash)]
+#[strum(serialize_all = "kebab-case")]
 pub enum Scope {
     Required,
     Optional,
     Excluded,
     #[doc(hidden)]
+    #[strum(default)]
     UnknownScope(String),
-}
-
-impl ToString for Scope {
-    fn to_string(&self) -> String {
-        match self {
-            Scope::Required => "required",
-            Scope::Optional => "optional",
-            Scope::Excluded => "excluded",
-            Scope::UnknownScope(us) => us,
-        }
-        .to_string()
-    }
 }
 
 impl Scope {
@@ -352,53 +266,24 @@ impl Scope {
     }
 }
 
-impl Validate for Scope {
-    fn validate_with_context(
-        &self,
-        context: ValidationContext,
-    ) -> Result<ValidationResult, ValidationError> {
-        match self {
-            Scope::UnknownScope(_) => Ok(ValidationResult::Failed {
-                reasons: vec![FailureReason {
-                    message: "Unknown scope".to_string(),
-                    context,
-                }],
-            }),
-            _ => Ok(ValidationResult::Passed),
-        }
+/// Checks if given [`MimeType`] is valid / supported.
+pub fn validate_mime_type(mime_type: &MimeType) -> Result<(), ValidationError> {
+    static UUID_REGEX: Lazy<Regex> =
+        Lazy::new(|| Regex::new(r"^[-+a-z0-9.]+/[-+a-z0-9.]+$").expect("Failed to compile regex."));
+
+    if !UUID_REGEX.is_match(&mime_type.0) {
+        return Err(ValidationError::new(
+            "MimeType does not match regular expression",
+        ));
     }
+
+    Ok(())
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct MimeType(pub(crate) String);
 
-impl Validate for MimeType {
-    fn validate_with_context(
-        &self,
-        context: ValidationContext,
-    ) -> Result<ValidationResult, ValidationError> {
-        static UUID_REGEX: Lazy<Result<Regex, regex::Error>> =
-            Lazy::new(|| Regex::new(r"^[-+a-z0-9.]+/[-+a-z0-9.]+$"));
-
-        match UUID_REGEX.as_ref() {
-            Ok(regex) => {
-                if regex.is_match(&self.0) {
-                    Ok(ValidationResult::Passed)
-                } else {
-                    Ok(ValidationResult::Failed {
-                        reasons: vec![FailureReason {
-                            message: "MimeType does not match regular expression".to_string(),
-                            context,
-                        }],
-                    })
-                }
-            }
-            Err(e) => Err(e.clone().into()),
-        }
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Swid {
     pub tag_id: String,
     pub name: String,
@@ -406,98 +291,279 @@ pub struct Swid {
     pub tag_version: Option<u32>,
     pub patch: Option<bool>,
     pub text: Option<AttachedText>,
-    pub url: Option<Uri>,
+    pub url: Option<Url>,
 }
 
 impl Validate for Swid {
-    fn validate_with_context(
-        &self,
-        context: ValidationContext,
-    ) -> Result<ValidationResult, ValidationError> {
-        let mut results: Vec<ValidationResult> = vec![];
-
-        if let Some(text) = &self.text {
-            let context = context.extend_context_with_struct_field("Swid", "text");
-
-            results.push(text.validate_with_context(context)?);
-        }
-
-        if let Some(url) = &self.url {
-            let context = context.extend_context_with_struct_field("Swid", "url");
-
-            results.push(url.validate_with_context(context)?);
-        }
-
-        Ok(results
-            .into_iter()
-            .fold(ValidationResult::default(), |acc, result| acc.merge(result)))
+    fn validate_version(&self, version: SpecVersion) -> ValidationResult {
+        ValidationContext::new()
+            .add_struct_option("text", self.text.as_ref(), version)
+            .add_field_option("url", self.url.as_ref(), validate_url)
+            .into()
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+pub fn validate_cpe(cpe: &Cpe) -> Result<(), ValidationError> {
+    static UUID_REGEX: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(
+            r##"([c][pP][eE]:/[AHOaho]?(:[A-Za-z0-9\._\-~%]*){0,6})|(cpe:2\.3:[aho\*\-](:(((\?*|\*?)([a-zA-Z0-9\-\._]|(\\[\\\*\?!"#$$%&'\(\)\+,/:;<=>@\[\]\^`\{\|}~]))+(\?*|\*?))|[\*\-])){5}(:(([a-zA-Z]{2,3}(-([a-zA-Z]{2}|[0-9]{3}))?)|[\*\-]))(:(((\?*|\*?)([a-zA-Z0-9\-\._]|(\\[\\\*\?!"#$$%&'\(\)\+,/:;<=>@\[\]\^`\{\|}~]))+(\?*|\*?))|[\*\-])){4})"##,
+        ).expect("Failed to compile regex.")
+    });
+
+    if !UUID_REGEX.is_match(&cpe.0) {
+        return Err(ValidationError::new(
+            "Cpe does not match regular expression",
+        ));
+    }
+
+    Ok(())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Cpe(pub(crate) String);
-impl Validate for Cpe {
-    fn validate_with_context(
-        &self,
-        context: ValidationContext,
-    ) -> Result<ValidationResult, ValidationError> {
-        static UUID_REGEX: Lazy<Result<Regex, regex::Error>> = Lazy::new(|| {
-            Regex::new(
-                r##"([c][pP][eE]:/[AHOaho]?(:[A-Za-z0-9\._\-~%]*){0,6})|(cpe:2\.3:[aho\*\-](:(((\?*|\*?)([a-zA-Z0-9\-\._]|(\\[\\\*\?!"#$$%&'\(\)\+,/:;<=>@\[\]\^`\{\|}~]))+(\?*|\*?))|[\*\-])){5}(:(([a-zA-Z]{2,3}(-([a-zA-Z]{2}|[0-9]{3}))?)|[\*\-]))(:(((\?*|\*?)([a-zA-Z0-9\-\._]|(\\[\\\*\?!"#$$%&'\(\)\+,/:;<=>@\[\]\^`\{\|}~]))+(\?*|\*?))|[\*\-])){4})"##,
-            )
-        });
 
-        match UUID_REGEX.as_ref() {
-            Ok(regex) => {
-                if regex.is_match(&self.0) {
-                    Ok(ValidationResult::Passed)
-                } else {
-                    Ok(ValidationResult::Failed {
-                        reasons: vec![FailureReason {
-                            message: "Cpe does not match regular expression".to_string(),
-                            context,
-                        }],
-                    })
-                }
-            }
-            Err(e) => Err(e.clone().into()),
-        }
+impl AsRef<str> for Cpe {
+    fn as_ref(&self) -> &str {
+        &self.0
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+impl From<Cpe> for String {
+    fn from(value: Cpe) -> Self {
+        value.0
+    }
+}
+
+impl std::fmt::Display for Cpe {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ComponentEvidence {
     pub licenses: Option<Licenses>,
     pub copyright: Option<CopyrightTexts>,
+    /// Added in version 1.5
+    pub occurrences: Option<Occurrences>,
+    /// Added in version 1.5
+    pub callstack: Option<Callstack>,
+    /// Added in version 1.5
+    pub identity: Option<Identity>,
 }
 
 impl Validate for ComponentEvidence {
-    fn validate_with_context(
-        &self,
-        context: ValidationContext,
-    ) -> Result<ValidationResult, ValidationError> {
-        let mut results: Vec<ValidationResult> = vec![];
-
-        if let Some(licenses) = &self.licenses {
-            let context = context.extend_context_with_struct_field("ComponentEvidence", "licenses");
-
-            results.push(licenses.validate_with_context(context)?);
-        }
-
-        if let Some(copyright) = &self.copyright {
-            let context =
-                context.extend_context_with_struct_field("ComponentEvidence", "copyright");
-
-            results.push(copyright.validate_with_context(context)?);
-        }
-
-        Ok(results
-            .into_iter()
-            .fold(ValidationResult::default(), |acc, result| acc.merge(result)))
+    fn validate_version(&self, version: SpecVersion) -> ValidationResult {
+        ValidationContext::new()
+            .add_struct_option("licenses", self.licenses.as_ref(), version)
+            .add_struct_option("copyright", self.copyright.as_ref(), version)
+            .add_struct_option("occurrences", self.occurrences.as_ref(), version)
+            .add_struct_option("callstack", self.callstack.as_ref(), version)
+            .add_struct_option("identity", self.identity.as_ref(), version)
+            .into()
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+/// For more details see
+/// https://cyclonedx.org/docs/1.5/json/#components_items_evidence_occurrences
+/// Added in version 1.5
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Occurrences(pub Vec<Occurrence>);
+
+impl Validate for Occurrences {
+    fn validate_version(&self, version: SpecVersion) -> ValidationResult {
+        ValidationContext::new()
+            .add_list("inner", &self.0, |occurrence| {
+                occurrence.validate_version(version)
+            })
+            .into()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Occurrence {
+    pub bom_ref: Option<BomReference>,
+    pub location: String,
+}
+
+impl Occurrence {
+    pub fn new(location: &str) -> Self {
+        Self {
+            bom_ref: None,
+            location: location.to_string(),
+        }
+    }
+}
+
+impl Validate for Occurrence {
+    fn validate_version(&self, version: SpecVersion) -> ValidationResult {
+        ValidationContext::new()
+            .add_field_option("bom-ref", self.bom_ref.as_ref(), |bom_ref| {
+                validate_bom_ref(bom_ref, version)
+            })
+            .into()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Callstack {
+    pub frames: Frames,
+}
+
+impl Callstack {
+    pub fn new(frames: Frames) -> Self {
+        Self { frames }
+    }
+}
+
+impl Validate for Callstack {
+    fn validate_version(&self, version: SpecVersion) -> ValidationResult {
+        self.frames.validate_version(version)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Frames(pub Vec<Frame>);
+
+impl Validate for Frames {
+    fn validate_version(&self, version: SpecVersion) -> ValidationResult {
+        ValidationContext::new()
+            .add_list("frames", &self.0, |frame| frame.validate_version(version))
+            .into()
+    }
+}
+
+/// For more information see
+/// https://cyclonedx.org/docs/1.5/json/#components_items_evidence_callstack
+/// Added in version 1.5
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Frame {
+    pub package: Option<NormalizedString>,
+    pub module: NormalizedString,
+    pub function: Option<NormalizedString>,
+    pub parameters: Option<Vec<NormalizedString>>,
+    pub line: Option<u32>,
+    pub column: Option<u32>,
+    pub full_filename: Option<NormalizedString>,
+}
+
+impl Validate for Frame {
+    fn validate_version(&self, _version: SpecVersion) -> ValidationResult {
+        ValidationContext::new()
+            .add_field_option("package", self.package.as_ref(), validate_normalized_string)
+            .add_field("module", self.module.as_ref(), validate_normalized_string)
+            .add_field_option(
+                "function",
+                self.function.as_ref(),
+                validate_normalized_string,
+            )
+            .add_list_option(
+                "parameters",
+                self.parameters.as_ref(),
+                validate_normalized_string,
+            )
+            .add_field_option(
+                "full_filename",
+                self.full_filename.as_ref(),
+                validate_normalized_string,
+            )
+            .into()
+    }
+}
+
+pub fn validate_confidence(confidence: &ConfidenceScore) -> Result<(), ValidationError> {
+    if confidence.get() < 0.0 && 1.0 > confidence.get() {
+        return Err("Confidence score outside range 0.0 - 1.0".into());
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ConfidenceScore(pub OrderedFloat<f32>);
+
+impl ConfidenceScore {
+    pub fn new(value: f32) -> Self {
+        Self(OrderedFloat(value))
+    }
+
+    pub fn get(&self) -> f32 {
+        self.0 .0
+    }
+}
+
+pub fn validate_identity_field(field: &IdentityField) -> Result<(), ValidationError> {
+    if let IdentityField::Unknown(unknown) = field {
+        return Err(format!("Unknown identity found '{}' given", unknown).into());
+    }
+    Ok(())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, strum::Display, Hash)]
+#[strum(serialize_all = "kebab-case")]
+#[repr(u16)]
+pub enum IdentityField {
+    Group,
+    Name,
+    Version,
+    Purl,
+    Cpe,
+    Swid,
+    Hash,
+    Unknown(String),
+}
+
+impl IdentityField {
+    pub(crate) fn new_unchecked<A: AsRef<str>>(value: A) -> Self {
+        match value.as_ref() {
+            "group" => Self::Group,
+            "name" => Self::Name,
+            "version" => Self::Version,
+            "purl" => Self::Purl,
+            "cpe" => Self::Cpe,
+            "swid" => Self::Swid,
+            "hash" => Self::Hash,
+            unknown => Self::Unknown(unknown.to_string()),
+        }
+    }
+}
+
+/// For more information see
+/// https://cyclonedx.org/docs/1.5/json/#components_items_evidence_identity
+/// Added in version 1.5
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Identity {
+    pub field: IdentityField,
+    /// Level between 0.0-1.0 (where 1.0 is highest confidence)
+    pub confidence: Option<ConfidenceScore>,
+    pub methods: Option<Methods>,
+    pub tools: Option<ToolsReferences>,
+}
+
+impl Validate for Identity {
+    fn validate_version(&self, _version: SpecVersion) -> ValidationResult {
+        ValidationContext::new()
+            .add_field("field", &self.field, validate_identity_field)
+            .add_field_option("confidence", self.confidence.as_ref(), validate_confidence)
+            .into()
+    }
+}
+
+/// For more information see
+/// https://cyclonedx.org/docs/1.5/json/#components_items_evidence_identity_methods
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Methods(pub Vec<Method>);
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Method {
+    pub technique: String,
+    pub confidence: ConfidenceScore,
+    pub value: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ToolsReferences(pub Vec<String>);
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Pedigree {
     pub ancestors: Option<Components>,
     pub descendants: Option<Components>,
@@ -508,106 +574,74 @@ pub struct Pedigree {
 }
 
 impl Validate for Pedigree {
-    fn validate_with_context(
-        &self,
-        context: ValidationContext,
-    ) -> Result<ValidationResult, ValidationError> {
-        let mut results: Vec<ValidationResult> = vec![];
-
-        if let Some(ancestors) = &self.ancestors {
-            let context = context.extend_context_with_struct_field("Pedigree", "ancestors");
-
-            results.push(ancestors.validate_with_context(context)?);
-        }
-
-        if let Some(descendants) = &self.descendants {
-            let context = context.extend_context_with_struct_field("Pedigree", "descendants");
-
-            results.push(descendants.validate_with_context(context)?);
-        }
-
-        if let Some(variants) = &self.variants {
-            let context = context.extend_context_with_struct_field("Pedigree", "variants");
-
-            results.push(variants.validate_with_context(context)?);
-        }
-
-        if let Some(commits) = &self.commits {
-            let context = context.extend_context_with_struct_field("Pedigree", "commits");
-
-            results.push(commits.validate_with_context(context)?);
-        }
-
-        if let Some(patches) = &self.patches {
-            let context = context.extend_context_with_struct_field("Pedigree", "patches");
-
-            results.push(patches.validate_with_context(context)?);
-        }
-
-        Ok(results
-            .into_iter()
-            .fold(ValidationResult::default(), |acc, result| acc.merge(result)))
+    fn validate_version(&self, version: SpecVersion) -> ValidationResult {
+        let mut context = ValidationContext::new();
+        context.add_struct_option("ancestors", self.ancestors.as_ref(), version);
+        context.add_struct_option("descendants", self.descendants.as_ref(), version);
+        context.add_struct_option("variants", self.variants.as_ref(), version);
+        context.add_struct_option("commits", self.commits.as_ref(), version);
+        context.add_struct_option("patches", self.patches.as_ref(), version);
+        context.into()
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+pub fn validate_copyright(_copyright: &Copyright) -> Result<(), ValidationError> {
+    Ok(())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Copyright(pub String);
 
-impl Validate for Copyright {
-    fn validate_with_context(
-        &self,
-        _context: ValidationContext,
-    ) -> Result<ValidationResult, ValidationError> {
-        Ok(ValidationResult::default())
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct CopyrightTexts(pub(crate) Vec<Copyright>);
 
 impl Validate for CopyrightTexts {
-    fn validate_with_context(
-        &self,
-        context: ValidationContext,
-    ) -> Result<ValidationResult, ValidationError> {
-        let mut results: Vec<ValidationResult> = vec![];
-
-        for (index, copyright) in self.0.iter().enumerate() {
-            let context = context.extend_context(vec![ValidationPathComponent::Array { index }]);
-            results.push(copyright.validate_with_context(context)?);
-        }
-
-        Ok(results
-            .into_iter()
-            .fold(ValidationResult::default(), |acc, result| acc.merge(result)))
+    fn validate_version(&self, _version: SpecVersion) -> ValidationResult {
+        ValidationContext::new()
+            .add_list("inner", &self.0, validate_copyright)
+            .into()
     }
 }
 
 #[cfg(test)]
 mod test {
+    use pretty_assertions::assert_eq;
 
     use crate::{
         external_models::spdx::SpdxExpression,
         models::{
+            attachment::Attachment,
+            bom::BomReference,
             code::{Commit, Patch, PatchClassification},
-            external_reference::{ExternalReference, ExternalReferenceType},
+            component_data::{
+                ComponentData, ComponentDataType, DataContents, Graphic, GraphicsCollection,
+            },
+            data_governance::{DataGovernance, DataGovernanceResponsibleParty},
+            external_reference::{ExternalReference, ExternalReferenceType, Uri},
             hash::{Hash, HashAlgorithm, HashValue},
             license::LicenseChoice,
+            modelcard::{
+                ApproachType, ConfidenceInterval, Considerations, Dataset, Datasets, Inputs,
+                MLParameter, ModelParameters, ModelParametersApproach, Outputs, PerformanceMetric,
+                PerformanceMetrics, QuantitativeAnalysis,
+            },
+            organization::OrganizationalContact,
             property::Property,
+            signature::Algorithm,
         },
-        validation::ValidationPathComponent,
+        validation,
     };
 
     use super::*;
-    use pretty_assertions::assert_eq;
 
     #[test]
     fn valid_components_should_pass_validation() {
-        let validation_result = Components(vec![Component {
+        let vec = vec![Component {
             component_type: Classification::Application,
             mime_type: Some(MimeType("text/text".to_string())),
             bom_ref: Some("bom ref".to_string()),
             supplier: Some(OrganizationalEntity {
+                bom_ref: Some(BomReference::new("Supplier 1")),
                 name: Some(NormalizedString::new("name")),
                 url: None,
                 contact: None,
@@ -616,16 +650,16 @@ mod test {
             publisher: Some(NormalizedString::new("publisher")),
             group: Some(NormalizedString::new("group")),
             name: NormalizedString::new("name"),
-            version: NormalizedString::new("version"),
+            version: Some(NormalizedString::new("version")),
             description: Some(NormalizedString::new("description")),
             scope: Some(Scope::Required),
             hashes: Some(Hashes(vec![Hash {
                 alg: HashAlgorithm::MD5,
                 content: HashValue("a3bf1f3d584747e2569483783ddee45b".to_string()),
             }])),
-            licenses: Some(Licenses(vec![LicenseChoice::Expression(SpdxExpression(
-                "MIT".to_string(),
-            ))])),
+            licenses: Some(Licenses(vec![LicenseChoice::Expression(
+                SpdxExpression::new("MIT"),
+            )])),
             copyright: Some(NormalizedString::new("copyright")),
             cpe: Some(Cpe("cpe:/a:example:mylibrary:1.0.0".to_string())),
             purl: Some(Purl("pkg:cargo/cyclonedx-bom@0.3.1".to_string())),
@@ -640,7 +674,7 @@ mod test {
                     encoding: None,
                     content: "content".to_string(),
                 }),
-                url: Some(Uri("https://example.com".to_string())),
+                url: Some(Url("https://example.com".to_string())),
             }),
             modified: Some(true),
             pedigree: Some(Pedigree {
@@ -663,7 +697,7 @@ mod test {
             }),
             external_references: Some(ExternalReferences(vec![ExternalReference {
                 external_reference_type: ExternalReferenceType::Bom,
-                url: Uri("https://www.example.com".to_string()),
+                url: Uri::Url(Url("https://www.example.com".to_string())),
                 comment: None,
                 hashes: None,
             }])),
@@ -673,16 +707,131 @@ mod test {
             }])),
             components: Some(Components(vec![])),
             evidence: Some(ComponentEvidence {
-                licenses: Some(Licenses(vec![LicenseChoice::Expression(SpdxExpression(
-                    "MIT".to_string(),
-                ))])),
+                licenses: Some(Licenses(vec![LicenseChoice::Expression(
+                    SpdxExpression::new("MIT"),
+                )])),
                 copyright: Some(CopyrightTexts(vec![Copyright("copyright".to_string())])),
+                occurrences: Some(Occurrences(vec![Occurrence {
+                    bom_ref: None,
+                    location: "location".to_string(),
+                }])),
+                callstack: Some(Callstack::new(Frames(vec![Frame {
+                    package: Some("package".into()),
+                    module: "module".into(),
+                    function: Some("function".into()),
+                    parameters: None,
+                    line: Some(10),
+                    column: Some(20),
+                    full_filename: Some("full_filename".into()),
+                }]))),
+                identity: Some(Identity {
+                    field: IdentityField::Group,
+                    confidence: Some(ConfidenceScore::new(0.8)),
+                    methods: Some(Methods(vec![Method {
+                        technique: "technique".to_string(),
+                        confidence: ConfidenceScore::new(0.5),
+                        value: Some("help".to_string()),
+                    }])),
+                    tools: None,
+                }),
             }),
-        }])
-        .validate_with_context(ValidationContext::default())
-        .expect("Error while validating");
+            signature: Some(Signature::single(Algorithm::HS512, "abcdefgh")),
+            model_card: Some(ModelCard {
+                bom_ref: None,
+                model_parameters: Some(ModelParameters {
+                    approach: Some(ModelParametersApproach {
+                        approach_type: Some(ApproachType::Supervised),
+                    }),
+                    task: Some("task".to_string()),
+                    architecture_family: Some("architecture family".to_string()),
+                    model_architecture: Some("model architecture".to_string()),
+                    datasets: Some(Datasets(vec![Dataset::Component(ComponentData {
+                        bom_ref: None,
+                        data_type: ComponentDataType::SourceCode,
+                        name: Some("dataset".to_string()),
+                        contents: Some(DataContents {
+                            attachment: Some(Attachment {
+                                content: "data content".to_string(),
+                                content_type: Some("text/plain".to_string()),
+                                encoding: Some("base64".to_string()),
+                            }),
+                            url: Some(Url("https://example.com".to_string())),
+                            properties: Some(Properties(vec![])),
+                        }),
+                        classification: Some("data classification".to_string()),
+                        sensitive_data: Some("sensitive".to_string()),
+                        graphics: Some(GraphicsCollection {
+                            description: Some("All graphics".to_string()),
+                            collection: Some(vec![Graphic {
+                                name: Some("graphic-1".to_string()),
+                                image: Some(Attachment {
+                                    content_type: Some("image/jpeg".to_string()),
+                                    encoding: Some("base64".to_string()),
+                                    content: "imagebytes".to_string(),
+                                }),
+                            }]),
+                        }),
+                        description: Some("Component data description".to_string()),
+                        governance: Some(DataGovernance {
+                            custodians: Some(vec![DataGovernanceResponsibleParty::Contact(
+                                OrganizationalContact {
+                                    bom_ref: Some(BomReference::new("custodian-1")),
+                                    name: Some("custodian".into()),
+                                    email: None,
+                                    phone: None,
+                                },
+                            )]),
+                            stewards: None,
+                            owners: None,
+                        }),
+                    })])),
+                    inputs: Some(Inputs(vec![MLParameter::new("string")])),
+                    outputs: Some(Outputs(vec![MLParameter::new("image")])),
+                }),
+                quantitative_analysis: Some(QuantitativeAnalysis {
+                    performance_metrics: Some(PerformanceMetrics(vec![PerformanceMetric {
+                        metric_type: Some("performance".to_string()),
+                        value: Some("metric value".to_string()),
+                        slice: None,
+                        confidence_interval: Some(ConfidenceInterval {
+                            lower_bound: Some("low".to_string()),
+                            upper_bound: Some("high".to_string()),
+                        }),
+                    }])),
+                    graphics: Some(GraphicsCollection {
+                        description: Some("graphics".to_string()),
+                        collection: None,
+                    }),
+                }),
+                considerations: Some(Considerations {}),
+                properties: Some(Properties(vec![Property {
+                    name: "property".to_string(),
+                    value: NormalizedString("value".to_string()),
+                }])),
+            }),
+            data: Some(ComponentData {
+                bom_ref: None,
+                data_type: ComponentDataType::SourceCode,
+                name: Some("github".into()),
+                contents: Some(DataContents {
+                    attachment: Some(Attachment {
+                        content: "some pic".into(),
+                        content_type: None,
+                        encoding: Some("base64".into()),
+                    }),
+                    url: None,
+                    properties: None,
+                }),
+                classification: None,
+                sensitive_data: None,
+                graphics: None,
+                description: None,
+                governance: None,
+            }),
+        }];
+        let validation_result = Components(vec).validate();
 
-        assert_eq!(validation_result, ValidationResult::Passed);
+        assert!(validation_result.passed());
     }
 
     #[test]
@@ -692,6 +841,7 @@ mod test {
             mime_type: Some(MimeType("invalid mime type".to_string())),
             bom_ref: Some("bom ref".to_string()),
             supplier: Some(OrganizationalEntity {
+                bom_ref: Some(BomReference::new("Supplier 1")),
                 name: Some(NormalizedString("invalid\tname".to_string())),
                 url: None,
                 contact: None,
@@ -700,16 +850,16 @@ mod test {
             publisher: Some(NormalizedString("invalid\tpublisher".to_string())),
             group: Some(NormalizedString("invalid\tgroup".to_string())),
             name: NormalizedString("invalid\tname".to_string()),
-            version: NormalizedString("invalid\tversion".to_string()),
+            version: Some(NormalizedString("invalid\tversion".to_string())),
             description: Some(NormalizedString("invalid\tdescription".to_string())),
             scope: Some(Scope::UnknownScope("unknown".to_string())),
             hashes: Some(Hashes(vec![Hash {
                 alg: HashAlgorithm::MD5,
                 content: HashValue("invalid hash content".to_string()),
             }])),
-            licenses: Some(Licenses(vec![LicenseChoice::Expression(SpdxExpression(
-                "invalid license".to_string(),
-            ))])),
+            licenses: Some(Licenses(vec![LicenseChoice::Expression(
+                SpdxExpression::new("invalid license"),
+            )])),
             copyright: Some(NormalizedString("invalid\tcopyright".to_string())),
             cpe: Some(Cpe("invalid cpe".to_string())),
             purl: Some(Purl("invalid purl".to_string())),
@@ -724,7 +874,7 @@ mod test {
                     encoding: None,
                     content: "content".to_string(),
                 }),
-                url: Some(Uri("invalid url".to_string())),
+                url: Some(Url("invalid url".to_string())),
             }),
             modified: Some(true),
             pedigree: Some(Pedigree {
@@ -751,7 +901,7 @@ mod test {
                 external_reference_type: ExternalReferenceType::UnknownExternalReferenceType(
                     "unknown".to_string(),
                 ),
-                url: Uri("https://www.example.com".to_string()),
+                url: Uri::Url(Url("https://www.example.com".to_string())),
                 comment: None,
                 hashes: None,
             }])),
@@ -761,397 +911,231 @@ mod test {
             }])),
             components: Some(Components(vec![invalid_component()])),
             evidence: Some(ComponentEvidence {
-                licenses: Some(Licenses(vec![LicenseChoice::Expression(SpdxExpression(
-                    "invalid license".to_string(),
-                ))])),
+                licenses: Some(Licenses(vec![LicenseChoice::Expression(
+                    SpdxExpression::new("invalid license"),
+                )])),
                 copyright: Some(CopyrightTexts(vec![Copyright("copyright".to_string())])),
+                occurrences: None,
+                callstack: None,
+                identity: None,
             }),
+            signature: Some(Signature::single(Algorithm::HS512, "abcdefgh")),
+            model_card: None,
+            data: None,
         }])
-        .validate_with_context(ValidationContext::default())
-        .expect("Error while validating");
+        .validate();
 
         assert_eq!(
             validation_result,
-            ValidationResult::Failed {
-                reasons: vec![
-                    FailureReason {
-                        message: "Unknown classification".to_string(),
-                        context: ValidationContext(vec![
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Component".to_string(),
-                                field_name: "component_type".to_string()
-                            },
-                        ])
-                    },
-                    FailureReason {
-                        message: "MimeType does not match regular expression".to_string(),
-                        context: ValidationContext(vec![
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Component".to_string(),
-                                field_name: "mime_type".to_string()
-                            },
-                        ])
-                    },
-                    FailureReason {
-                        message:
+            validation::list(
+                "inner",
+                [(
+                    0,
+                    vec![
+                        validation::field("component_type", "Unknown classification"),
+                        validation::field(
+                            "mime_type",
+                            "MimeType does not match regular expression"
+                        ),
+                        validation::r#struct(
+                            "supplier",
+                            validation::field(
+                                "name",
+                                "NormalizedString contains invalid characters \\r \\n \\t or \\r\\n"
+                            )
+                        ),
+                        validation::field(
+                            "author",
                             "NormalizedString contains invalid characters \\r \\n \\t or \\r\\n"
-                                .to_string(),
-                        context: ValidationContext(vec![
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Component".to_string(),
-                                field_name: "supplier".to_string()
-                            },
-                            ValidationPathComponent::Struct {
-                                struct_name: "OrganizationalEntity".to_string(),
-                                field_name: "name".to_string()
-                            },
-                        ])
-                    },
-                    FailureReason {
-                        message:
+                        ),
+                        validation::field(
+                            "publisher",
                             "NormalizedString contains invalid characters \\r \\n \\t or \\r\\n"
-                                .to_string(),
-                        context: ValidationContext(vec![
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Component".to_string(),
-                                field_name: "author".to_string()
-                            },
-                        ])
-                    },
-                    FailureReason {
-                        message:
+                        ),
+                        validation::field(
+                            "group",
                             "NormalizedString contains invalid characters \\r \\n \\t or \\r\\n"
-                                .to_string(),
-                        context: ValidationContext(vec![
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Component".to_string(),
-                                field_name: "publisher".to_string()
-                            },
-                        ])
-                    },
-                    FailureReason {
-                        message:
+                        ),
+                        validation::field(
+                            "name",
                             "NormalizedString contains invalid characters \\r \\n \\t or \\r\\n"
-                                .to_string(),
-                        context: ValidationContext(vec![
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Component".to_string(),
-                                field_name: "group".to_string()
-                            },
-                        ])
-                    },
-                    FailureReason {
-                        message:
+                        ),
+                        validation::field(
+                            "version",
                             "NormalizedString contains invalid characters \\r \\n \\t or \\r\\n"
-                                .to_string(),
-                        context: ValidationContext(vec![
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Component".to_string(),
-                                field_name: "name".to_string()
-                            },
-                        ])
-                    },
-                    FailureReason {
-                        message:
+                        ),
+                        validation::field(
+                            "description",
                             "NormalizedString contains invalid characters \\r \\n \\t or \\r\\n"
-                                .to_string(),
-                        context: ValidationContext(vec![
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Component".to_string(),
-                                field_name: "version".to_string()
-                            },
-                        ])
-                    },
-                    FailureReason {
-                        message:
+                        ),
+                        validation::r#enum(
+                            "scope",
+                            "Unknown scope"
+                        ),
+                        validation::r#struct(
+                            "hashes",
+                            validation::list(
+                                "inner",
+                                [(
+                                    0,
+                                    validation::field(
+                                        "content",
+                                        "HashValue does not match regular expression"
+                                    )
+                                )]
+                            )
+                        ),
+                        validation::r#struct(
+                            "licenses",
+                            validation::list(
+                                "inner",
+                                [(
+                                    0,
+                                    validation::r#enum(
+                                        "expression",
+                                        "SPDX expression is not valid"
+                                    )
+                                )]
+                            )
+                        ),
+                        validation::field(
+                            "copyright",
                             "NormalizedString contains invalid characters \\r \\n \\t or \\r\\n"
-                                .to_string(),
-                        context: ValidationContext(vec![
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Component".to_string(),
-                                field_name: "description".to_string()
-                            },
-                        ])
-                    },
-                    FailureReason {
-                        message: "Unknown scope".to_string(),
-                        context: ValidationContext(vec![
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Component".to_string(),
-                                field_name: "scope".to_string()
-                            },
-                        ])
-                    },
-                    FailureReason {
-                        message: "HashValue does not match regular expression".to_string(),
-                        context: ValidationContext(vec![
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Component".to_string(),
-                                field_name: "hashes".to_string()
-                            },
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Hash".to_string(),
-                                field_name: "content".to_string()
-                            }
-                        ])
-                    },
-                    FailureReason {
-                        message: "SPDX expression is not valid".to_string(),
-                        context: ValidationContext(vec![
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Component".to_string(),
-                                field_name: "licenses".to_string()
-                            },
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::EnumVariant {
-                                variant_name: "Expression".to_string()
-                            },
-                        ])
-                    },
-                    FailureReason {
-                        message:
-                            "NormalizedString contains invalid characters \\r \\n \\t or \\r\\n"
-                                .to_string(),
-                        context: ValidationContext(vec![
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Component".to_string(),
-                                field_name: "copyright".to_string()
-                            },
-                        ])
-                    },
-                    FailureReason {
-                        message: "Cpe does not match regular expression".to_string(),
-                        context: ValidationContext(vec![
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Component".to_string(),
-                                field_name: "cpe".to_string()
-                            },
-                        ])
-                    },
-                    FailureReason {
-                        message: "Purl does not conform to Package URL spec: missing scheme"
-                            .to_string(),
-                        context: ValidationContext(vec![
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Component".to_string(),
-                                field_name: "purl".to_string()
-                            },
-                        ])
-                    },
-                    FailureReason {
-                        message:
-                            "NormalizedString contains invalid characters \\r \\n \\t or \\r\\n"
-                                .to_string(),
-                        context: ValidationContext(vec![
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Component".to_string(),
-                                field_name: "swid".to_string()
-                            },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Swid".to_string(),
-                                field_name: "text".to_string()
-                            },
-                            ValidationPathComponent::Struct {
-                                struct_name: "AttachedText".to_string(),
-                                field_name: "content_type".to_string()
-                            },
-                        ])
-                    },
-                    FailureReason {
-                        message: "Uri does not conform to ISO 8601".to_string(),
-                        context: ValidationContext(vec![
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Component".to_string(),
-                                field_name: "swid".to_string()
-                            },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Swid".to_string(),
-                                field_name: "url".to_string()
-                            },
-                        ])
-                    },
-                    FailureReason {
-                        message: "Unknown classification".to_string(),
-                        context: ValidationContext(vec![
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Component".to_string(),
-                                field_name: "pedigree".to_string()
-                            },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Pedigree".to_string(),
-                                field_name: "ancestors".to_string()
-                            },
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Component".to_string(),
-                                field_name: "component_type".to_string()
-                            }
-                        ])
-                    },
-                    FailureReason {
-                        message: "Unknown classification".to_string(),
-                        context: ValidationContext(vec![
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Component".to_string(),
-                                field_name: "pedigree".to_string()
-                            },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Pedigree".to_string(),
-                                field_name: "descendants".to_string()
-                            },
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Component".to_string(),
-                                field_name: "component_type".to_string()
-                            }
-                        ])
-                    },
-                    FailureReason {
-                        message: "Unknown classification".to_string(),
-                        context: ValidationContext(vec![
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Component".to_string(),
-                                field_name: "pedigree".to_string()
-                            },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Pedigree".to_string(),
-                                field_name: "variants".to_string()
-                            },
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Component".to_string(),
-                                field_name: "component_type".to_string()
-                            }
-                        ])
-                    },
-                    FailureReason {
-                        message:
-                            "NormalizedString contains invalid characters \\r \\n \\t or \\r\\n"
-                                .to_string(),
-                        context: ValidationContext(vec![
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Component".to_string(),
-                                field_name: "pedigree".to_string()
-                            },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Pedigree".to_string(),
-                                field_name: "commits".to_string()
-                            },
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Commit".to_string(),
-                                field_name: "uid".to_string()
-                            }
-                        ])
-                    },
-                    FailureReason {
-                        message: "Unknown patch classification".to_string(),
-                        context: ValidationContext(vec![
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Component".to_string(),
-                                field_name: "pedigree".to_string()
-                            },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Pedigree".to_string(),
-                                field_name: "patches".to_string()
-                            },
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Patch".to_string(),
-                                field_name: "patch_type".to_string()
-                            }
-                        ])
-                    },
-                    FailureReason {
-                        message: "Unknown external reference type".to_string(),
-                        context: ValidationContext(vec![
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Component".to_string(),
-                                field_name: "external_references".to_string()
-                            },
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "ExternalReference".to_string(),
-                                field_name: "external_reference_type".to_string()
-                            }
-                        ])
-                    },
-                    FailureReason {
-                        message:
-                            "NormalizedString contains invalid characters \\r \\n \\t or \\r\\n"
-                                .to_string(),
-                        context: ValidationContext(vec![
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Component".to_string(),
-                                field_name: "properties".to_string()
-                            },
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Property".to_string(),
-                                field_name: "value".to_string()
-                            }
-                        ])
-                    },
-                    FailureReason {
-                        message: "Unknown classification".to_string(),
-                        context: ValidationContext(vec![
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Component".to_string(),
-                                field_name: "components".to_string()
-                            },
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Component".to_string(),
-                                field_name: "component_type".to_string()
-                            }
-                        ])
-                    },
-                    FailureReason {
-                        message: "SPDX expression is not valid".to_string(),
-                        context: ValidationContext(vec![
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::Struct {
-                                struct_name: "Component".to_string(),
-                                field_name: "evidence".to_string()
-                            },
-                            ValidationPathComponent::Struct {
-                                struct_name: "ComponentEvidence".to_string(),
-                                field_name: "licenses".to_string()
-                            },
-                            ValidationPathComponent::Array { index: 0 },
-                            ValidationPathComponent::EnumVariant {
-                                variant_name: "Expression".to_string()
-                            },
-                        ])
-                    },
-                ]
-            }
+                        ),
+                        validation::field(
+                            "cpe",
+                            "Cpe does not match regular expression"
+                        ),
+                        validation::field(
+                            "purl",
+                            "Purl does not conform to Package URL spec"
+                        ),
+                        validation::r#struct(
+                            "swid",
+                            vec![
+                                validation::r#struct(
+                                    "text",
+                                    validation::field(
+                                        "content_type",
+                                        "NormalizedString contains invalid characters \\r \\n \\t or \\r\\n"
+                                    )
+                                ),
+                                validation::field(
+                                    "url",
+                                    "Uri does not conform to RFC 3986"
+                                )
+                            ]
+                        ),
+                        validation::r#struct(
+                            "pedigree",
+                            vec![
+                                validation::r#struct(
+                                    "ancestors",
+                                    validation::list(
+                                        "inner",
+                                        [(
+                                            0,
+                                            validation::field("component_type", "Unknown classification")
+                                        )]
+                                    )
+                                ),
+                                validation::r#struct(
+                                    "descendants",
+                                    validation::list(
+                                        "inner",
+                                        [(
+                                            0,
+                                            validation::field("component_type", "Unknown classification")
+                                        )]
+                                    )
+                                ),
+                                validation::r#struct(
+                                    "variants",
+                                    validation::list(
+                                        "inner",
+                                        [(
+                                            0,
+                                            validation::field("component_type", "Unknown classification")
+                                        )]
+                                    )
+                                ),
+                                validation::r#struct(
+                                    "commits",
+                                    validation::list(
+                                        "inner",
+                                        [(
+                                            0,
+                                            validation::field(
+                                                "uid",
+                                                "NormalizedString contains invalid characters \\r \\n \\t or \\r\\n"
+                                            )
+                                        )]
+                                    )
+                                ),
+                                validation::r#struct(
+                                    "patches",
+                                    validation::list(
+                                        "inner",
+                                        [(
+                                            0,
+                                            validation::r#enum("patch_type", "Unknown patch classification")
+                                        )]
+                                    )
+                                )
+                            ]
+                        ),
+                        validation::r#struct(
+                            "external_references",
+                            validation::list(
+                                "inner",
+                                [(
+                                    0,
+                                    validation::field(
+                                        "external_reference_type",
+                                        "Unknown external reference type"
+                                    )
+                                )]
+                            )
+                        ),
+                        validation::r#struct(
+                            "properties",
+                            validation::list(
+                                "inner",
+                                [(
+                                    0,
+                                    validation::field(
+                                        "value",
+                                        "NormalizedString contains invalid characters \\r \\n \\t or \\r\\n"
+                                    )
+                                )]
+                            )
+                        ),
+                        validation::r#struct(
+                            "components",
+                            validation::list(
+                                "inner",
+                                [(
+                                    0,
+                                    validation::field("component_type", "Unknown classification")
+                                )]
+                            )
+                        ),
+                        validation::r#struct(
+                            "evidence",
+                            validation::r#struct(
+                                "licenses",
+                                validation::list(
+                                    "inner",
+                                    [(
+                                        0,
+                                        validation::r#enum("expression", "SPDX expression is not valid")
+                                    )]
+                                )
+                            )
+                        )
+                    ]
+                )]
+            )
         );
     }
 
@@ -1165,7 +1149,7 @@ mod test {
             publisher: None,
             group: None,
             name: NormalizedString::new("name"),
-            version: NormalizedString::new("version"),
+            version: Some(NormalizedString::new("version")),
             description: None,
             scope: None,
             hashes: None,
@@ -1180,6 +1164,28 @@ mod test {
             properties: None,
             components: None,
             evidence: None,
+            signature: None,
+            model_card: None,
+            data: None,
         }
+    }
+
+    #[test]
+    fn test_validate_classification() {
+        assert!(validate_classification(&Classification::Library, SpecVersion::V1_4).is_ok());
+        assert!(validate_classification(&Classification::Library, SpecVersion::V1_5).is_ok());
+        assert!(validate_classification(&Classification::Platform, SpecVersion::V1_5).is_ok());
+
+        assert!(validate_classification(&Classification::Platform, SpecVersion::V1_4).is_err());
+        assert!(validate_classification(
+            &Classification::UnknownClassification("test".to_string()),
+            SpecVersion::V1_4
+        )
+        .is_err());
+        assert!(validate_classification(
+            &Classification::UnknownClassification("foo".to_string()),
+            SpecVersion::V1_5
+        )
+        .is_err());
     }
 }

@@ -5,16 +5,9 @@ use xml::{
     name::OwnedName,
     namespace::{Namespace, NS_NO_PREFIX},
     reader::{self},
-    writer::{self, EventWriter},
+    writer::{self, EventWriter, XmlEvent},
     EventReader,
 };
-
-pub(crate) trait ToXmlDocument {
-    fn write_xml_document<W: Write>(
-        &self,
-        writer: &mut EventWriter<W>,
-    ) -> Result<(), XmlWriteError>;
-}
 
 pub(crate) trait ToXml {
     fn write_xml_element<W: Write>(&self, writer: &mut EventWriter<W>)
@@ -22,6 +15,23 @@ pub(crate) trait ToXml {
 
     fn will_write(&self) -> bool {
         true
+    }
+}
+
+impl<T: ToXml> ToXml for Option<T> {
+    fn write_xml_element<W: Write>(
+        &self,
+        writer: &mut EventWriter<W>,
+    ) -> Result<(), XmlWriteError> {
+        if let Some(item) = self {
+            item.write_xml_element(writer)?;
+        }
+
+        Ok(())
+    }
+
+    fn will_write(&self) -> bool {
+        self.is_some()
     }
 }
 
@@ -34,6 +44,24 @@ pub(crate) trait ToInnerXml {
 
     fn will_write(&self) -> bool {
         true
+    }
+}
+
+impl<T: ToInnerXml> ToInnerXml for Option<T> {
+    fn write_xml_named_element<W: Write>(
+        &self,
+        writer: &mut EventWriter<W>,
+        tag: &str,
+    ) -> Result<(), XmlWriteError> {
+        if let Some(item) = self {
+            item.write_xml_named_element(writer, tag)?;
+        }
+
+        Ok(())
+    }
+
+    fn will_write(&self) -> bool {
+        self.is_some()
     }
 }
 
@@ -57,6 +85,67 @@ pub(crate) fn write_simple_tag<W: Write>(
     Ok(())
 }
 
+pub(crate) fn write_simple_option_tag<W: Write>(
+    writer: &mut EventWriter<W>,
+    tag: &str,
+    content: &Option<impl AsRef<str>>,
+) -> Result<(), XmlWriteError> {
+    if let Some(content) = content.as_ref() {
+        write_simple_tag(writer, tag, content.as_ref())?
+    }
+
+    Ok(())
+}
+
+/// Writes a simple start tag of the form `<tag>` without attributes.
+pub(crate) fn write_start_tag<W: Write>(
+    writer: &mut EventWriter<W>,
+    tag: &str,
+) -> Result<(), XmlWriteError> {
+    writer
+        .write(XmlEvent::start_element(tag))
+        .map_err(to_xml_write_error(tag))
+}
+
+/// Writes the closing tag of the form `</tag>`
+pub(crate) fn write_close_tag<W: Write>(
+    writer: &mut EventWriter<W>,
+    tag: &str,
+) -> Result<(), XmlWriteError> {
+    writer
+        .write(XmlEvent::end_element())
+        .map_err(to_xml_write_error(tag))
+}
+
+pub(crate) fn write_list_tag<W: Write>(
+    writer: &mut EventWriter<W>,
+    tag: &str,
+    list: &[impl ToXml],
+) -> Result<(), XmlWriteError> {
+    write_start_tag(writer, tag)?;
+
+    for item in list {
+        item.write_xml_element(writer)?;
+    }
+
+    write_close_tag(writer, tag)
+}
+
+pub(crate) fn write_list_string_tag<W: Write>(
+    writer: &mut EventWriter<W>,
+    tag: &str,
+    child_tag: &str,
+    list: &[impl AsRef<str>],
+) -> Result<(), XmlWriteError> {
+    write_start_tag(writer, tag)?;
+
+    for item in list {
+        write_simple_tag(writer, child_tag, item.as_ref())?;
+    }
+
+    write_close_tag(writer, tag)
+}
+
 pub(crate) fn to_xml_write_error(
     element: impl AsRef<str>,
 ) -> impl FnOnce(xml::writer::Error) -> XmlWriteError {
@@ -78,6 +167,120 @@ pub(crate) trait FromXml {
     ) -> Result<Self, XmlReadError>
     where
         Self: Sized;
+}
+
+#[macro_export]
+macro_rules! get_elements_lax {
+    ($event_reader:ident, $element_name: ident, $($tag:pat => $name:ident: $type:ty,)+) => {
+            $(let mut $name: Option<$type> = None;)*
+
+            let mut got_end_tag = false;
+
+            while !got_end_tag {
+                let next_element = $event_reader.next().map_err($crate::xml::to_xml_read_error(&$element_name.local_name))?;
+                match next_element {
+                    xml::reader::XmlEvent::StartElement {
+                        name: ref elem_name,
+                        ref attributes,
+                        ..
+                    } => {
+                        match elem_name.local_name.as_str() {
+                            $($tag => {
+                                $name = Some(<$type as $crate::xml::FromXml>::read_xml_element(
+                                    $event_reader,
+                                    &elem_name,
+                                    &attributes,
+                                )?);
+                            },)*
+                            _ => $crate::xml::read_lax_validation_tag($event_reader, &elem_name)?,
+                        }
+                    }
+                    xml::reader::XmlEvent::EndElement { name } if &name == $element_name => {
+                        got_end_tag = true;
+                    }
+                    unexpected => return Err($crate::xml::unexpected_element_error($element_name, unexpected)),
+                }
+            }
+    };
+}
+
+#[macro_export]
+macro_rules! get_elements {
+    ($event_reader:ident, $element_name: ident, $($tag:pat => $name:ident: $type:ty,)+) => {
+        $(let mut $name: Option<$type> = None;)*
+
+        let mut got_end_tag = false;
+
+        while !got_end_tag {
+            let next_element = $event_reader.next().map_err($crate::xml::to_xml_read_error(&$element_name.local_name))?;
+            match next_element {
+                xml::reader::XmlEvent::StartElement {
+                    name: ref elem_name,
+                    ref attributes,
+                    ..
+                } => {
+                    match elem_name.local_name.as_str() {
+                        $($tag => {
+                            $name = Some(<$type as $crate::xml::FromXml>::read_xml_element(
+                                $event_reader,
+                                &elem_name,
+                                &attributes,
+                            )?);
+                        },)*
+                        unexpected => return Err($crate::xml::unexpected_element_error(unexpected.to_string(), next_element)),
+                    }
+                }
+                xml::reader::XmlEvent::EndElement { name } if &name == $element_name => {
+                    got_end_tag = true;
+                }
+                unexpected => return Err($crate::xml::unexpected_element_error($element_name, unexpected)),
+            }
+        }
+    };
+}
+
+/// Helper trait that represents the inner tag of a sequence of elements.
+pub(crate) trait VecElemTag {
+    const VALUE: &'static str;
+}
+
+#[macro_export]
+macro_rules! elem_tag {
+    ($name:ident = $value:literal) => {
+        struct $name {}
+
+        impl $crate::xml::VecElemTag for $name {
+            const VALUE: &'static str = $value;
+        }
+    };
+}
+
+/// Helper type to deserialize sequences of elements
+pub(crate) struct VecXmlReader<E: FromXml, T: VecElemTag> {
+    inner: Vec<E>,
+    _marker: std::marker::PhantomData<T>,
+}
+
+impl<E: FromXml, T: VecElemTag> From<VecXmlReader<E, T>> for Vec<E> {
+    fn from(reader: VecXmlReader<E, T>) -> Self {
+        reader.inner
+    }
+}
+
+impl<E: FromXml, T: VecElemTag> FromXml for VecXmlReader<E, T> {
+    fn read_xml_element<R: std::io::prelude::Read>(
+        event_reader: &mut xml::EventReader<R>,
+        element_name: &xml::name::OwnedName,
+        _attributes: &[xml::attribute::OwnedAttribute],
+    ) -> Result<Self, XmlReadError>
+    where
+        Self: Sized,
+    {
+        read_list_tag(event_reader, element_name, T::VALUE).map(|inner| Self {
+            inner,
+            _marker: Default::default(),
+        })
+    }
 }
 
 pub(crate) fn to_xml_read_error(
@@ -115,6 +318,17 @@ pub(crate) fn inner_text_or_error(
     let element_name = element_name.as_ref().to_owned();
     |event| match event {
         reader::XmlEvent::Characters(s) | reader::XmlEvent::CData(s) => Ok(s),
+        unexpected => Err(unexpected_element_error(element_name, unexpected)),
+    }
+}
+
+pub(crate) fn inner_text_or_none(
+    element_name: impl AsRef<str>,
+) -> impl FnOnce(xml::reader::XmlEvent) -> Result<Option<String>, XmlReadError> {
+    let element_name = element_name.as_ref().to_owned();
+    |event| match event {
+        reader::XmlEvent::Characters(s) | reader::XmlEvent::CData(s) => Ok(Some(s)),
+        reader::XmlEvent::EndElement { name } if name.to_string() == element_name => Ok(None),
         unexpected => Err(unexpected_element_error(element_name, unexpected)),
     }
 }
@@ -208,6 +422,26 @@ impl FromXmlType for u32 {
     }
 }
 
+impl FromXmlType for f32 {
+    fn xml_type_display() -> String {
+        "xs:decimal".to_string()
+    }
+
+    fn from_xml_value(
+        element: impl ToString,
+        value: impl AsRef<str>,
+    ) -> Result<Self, XmlReadError> {
+        let value = value.as_ref();
+        let value: f32 = value.parse().map_err(|_| XmlReadError::InvalidParseError {
+            value: value.to_string(),
+            data_type: Self::xml_type_display(),
+            element: element.to_string(),
+        })?;
+
+        Ok(value)
+    }
+}
+
 pub(crate) fn read_simple_tag<R: Read>(
     event_reader: &mut EventReader<R>,
     element: &OwnedName,
@@ -224,6 +458,85 @@ pub(crate) fn read_simple_tag<R: Read>(
         .and_then(closing_tag_or_error(element))?;
 
     Ok(content)
+}
+
+pub(crate) fn read_optional_tag<R: Read>(
+    event_reader: &mut EventReader<R>,
+    element: &OwnedName,
+) -> Result<Option<String>, XmlReadError> {
+    let element_display = element.to_string();
+    let content = event_reader
+        .next()
+        .map_err(to_xml_read_error(&element_display))
+        .and_then(inner_text_or_none(&element_display))?;
+
+    // If XML tag has content, read next element
+    if content.is_some() {
+        event_reader
+            .next()
+            .map_err(to_xml_read_error(&element_display))
+            .and_then(closing_tag_or_error(element))?;
+    }
+
+    Ok(content)
+}
+
+pub(crate) fn read_u32_tag<R: Read>(
+    event_reader: &mut EventReader<R>,
+    element: &OwnedName,
+) -> Result<u32, XmlReadError> {
+    let element_display = element.to_string();
+    let content = event_reader
+        .next()
+        .map_err(to_xml_read_error(&element_display))
+        .and_then(inner_text_or_error(&element_display))?;
+
+    let number = match content.trim().parse::<u32>() {
+        Ok(n) => n,
+        Err(_) => {
+            return Err(XmlReadError::InvalidParseError {
+                value: content,
+                data_type: "u32".to_string(),
+                element: element_display,
+            })
+        }
+    };
+
+    event_reader
+        .next()
+        .map_err(to_xml_read_error(&element_display))
+        .and_then(closing_tag_or_error(element))?;
+
+    Ok(number)
+}
+
+pub(crate) fn read_f32_tag<R: Read>(
+    event_reader: &mut EventReader<R>,
+    element: &OwnedName,
+) -> Result<f32, XmlReadError> {
+    let element_display = element.to_string();
+    let content = event_reader
+        .next()
+        .map_err(to_xml_read_error(&element_display))
+        .and_then(inner_text_or_error(&element_display))?;
+
+    let number = match content.trim().parse::<f32>() {
+        Ok(n) => n,
+        Err(_) => {
+            return Err(XmlReadError::InvalidParseError {
+                value: content,
+                data_type: "f32".to_string(),
+                element: element_display,
+            })
+        }
+    };
+
+    event_reader
+        .next()
+        .map_err(to_xml_read_error(&element_display))
+        .and_then(closing_tag_or_error(element))?;
+
+    Ok(number)
 }
 
 pub(crate) fn read_boolean_tag<R: Read>(
@@ -244,6 +557,45 @@ impl FromXml for String {
         Self: Sized,
     {
         read_simple_tag(event_reader, element_name)
+    }
+}
+
+impl FromXml for u32 {
+    fn read_xml_element<R: Read>(
+        event_reader: &mut EventReader<R>,
+        element_name: &OwnedName,
+        _attributes: &[OwnedAttribute],
+    ) -> Result<Self, XmlReadError>
+    where
+        Self: Sized,
+    {
+        read_u32_tag(event_reader, element_name)
+    }
+}
+
+impl FromXml for f32 {
+    fn read_xml_element<R: Read>(
+        event_reader: &mut EventReader<R>,
+        element_name: &OwnedName,
+        _attributes: &[OwnedAttribute],
+    ) -> Result<Self, XmlReadError>
+    where
+        Self: Sized,
+    {
+        read_f32_tag(event_reader, element_name)
+    }
+}
+
+impl FromXml for bool {
+    fn read_xml_element<R: Read>(
+        event_reader: &mut EventReader<R>,
+        element_name: &OwnedName,
+        _attributes: &[OwnedAttribute],
+    ) -> Result<Self, XmlReadError>
+    where
+        Self: Sized,
+    {
+        read_boolean_tag(event_reader, element_name)
     }
 }
 

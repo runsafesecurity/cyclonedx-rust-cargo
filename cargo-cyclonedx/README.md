@@ -8,9 +8,9 @@
 
 # `cargo-cyclonedx`
 
-The [CycloneDX](https://cyclonedx.org/) plugin for `cargo` creates a [custom `cargo` subcommand](https://doc.rust-lang.org/cargo/reference/external-tools.html#custom-subcommands) that generates a Software Bill-of-Materials (SBOM) file that describes the `cargo` project.
+This [CycloneDX](https://cyclonedx.org/) plugin for `cargo` creates a [custom `cargo` subcommand](https://doc.rust-lang.org/cargo/reference/external-tools.html#custom-subcommands) that generates a Software Bill of Materials (SBOM) file that describes the `cargo` project.
 
-CycloneDX is a lightweight SBOM specification that is easily created, human and machine readable, and simple to parse.
+CycloneDX is a lightweight SBOM specification that is easily created, human and machine-readable, and simple to parse.
 
 ## Usage
 
@@ -30,75 +30,81 @@ This produces a `bom.xml` file adjacent to every `Cargo.toml` file that exists i
 
 #### Command-line options
 
-* `--format` (`xml` or `json`): Defaults to XML output
-* `--all`: Include the transitive dependencies for the project rather than only the top-level dependencies
-* `--manifest-path`: where to find the `Cargo.toml` file if other than the default `cargo` location of the current directory
-* `--output-cdx`: Include `.cdx` in the filename as described in [the recognized file patterns](https://cyclonedx.org/specification/overview/#recognized-file-patterns)
-* `--output-pattern` (`bom` or `package`)
-  * `bom`: Outputs a prefix of `bom` for the filename
-  * `package`: Outputs a prefix using the `Cargo.toml` package name for the filename
-* `--output-prefix`: Outputs a custom prefix for the filename
+```
+      --manifest-path <PATH>
+          Path to Cargo.toml
 
-Notes:
+  -f, --format <FORMAT>
+          Output BOM format: json, xml
 
-* `--output-cdx`, `--output-pattern`, and `--output-prefix` are a group of options. Passing any of them as arguments will override any `output_options` configurations in `Cargo.toml` files.
-* `--output-pattern` and `--output-prefix` cannot be passed as arguments at the same time.
+      --describe <DESCRIBE>
+          Possible values:
+          - crate:             Describe the entire crate in a single SBOM file, with Cargo targets as subcomponents. (default)
+          - binaries:          A separate SBOM is emitted for each binary (bin, cdylib) while all other targets are ignored
+          - all-cargo-targets: A separate SBOM is emitted for each Cargo target, including things that aren't directly executable (e.g rlib)
 
-### Manifest Configuration
+  -v, --verbose...
+          Use verbose output (-vv for debug logging, -vvv for tracing)
 
-There are several locations you can set configuration options for convenience. If your project uses a
-[Cargo workspace](https://doc.rust-lang.org/book/ch14-03-cargo-workspaces.html), you can set configuration as
-toml values under `[workspace.metadata.cyclonedx]` in your workspace manifest. These configuration values will
-propagate to your workspace packages unless you override the values either by specifying toml values under
-`[package.metadata.cyclonedx]` in your package manifest or with command-line options.
+  -q, --quiet...
+          Disable progress reports (-qq to suppress warnings)
 
-Option                  | Values (*default)   | Description
------------------------ | ------------------- | --------------------------
-`included_dependencies` | `top-level`*, `all` | Either only direct (`top-level`) or including transitive (`all`) dependencies
-`format`                | `xml`*, `json`      | Output format for the SBOM
-`output_options`        | `<defined below>`   | A collection of options for file output
+      --all-features
+          Activate all available features
 
-#### Output Options
+      --no-default-features
+          Do not activate the `default` feature
 
-Option    | Values (*default)   | Description
---------- | ------------------- | --------------------------
-`cdx`     | `true` / `false`*   | Determines if `.cdx` is included in the filename as described in [the recognized file patterns](https://cyclonedx.org/specification/overview/#recognized-file-patterns)
-`pattern` | `bom`*, `package`   | `bom` outputs `bom`, while `package` outputs the `Cargo.toml` package name as the prefix
-`prefix`  | `<filename prefix>` | Outputs a custom value for the prefix
+  -F, --features <FEATURES>
+          Space or comma separated list of features to activate
 
-Notes:
+      --target <TARGET>
+          The target to generate the SBOM for, e.g. 'x86_64-unknown-linux-gnu'.
+          Use 'all' to include dependencies for all possible targets.
+          Defaults to the host target, as printed by 'rustc -vV'
 
-* `output_options` values are merged as a single configuration, so a package-level configuration will override the whole workspace-level configuration.
-* `pattern` and `prefix` cannot be configured at the same time.
+      --target-in-filename
+          Include the target platform of the BOM in the filename
 
-#### Precedence
+  -a, --all
+          List all dependencies instead of only top-level ones (default)
 
-Configuration options will be merged and applied in the following order from lowest to highest precedence.
+      --top-level
+          List only top-level dependencies
 
-1. Defaults
-2. Workspace manifest metadata
-3. Package manifest metadata
-4. Command-line options
+      --override-filename <FILENAME>
+          Custom string to use for the output filename
 
-#### Example Workspace Configuration
+      --license-strict
+          Reject the deprecated '/' separator for licenses, treating 'MIT/Apache-2.0' as an error
 
-``` toml
-[workspace.metadata.cyclonedx]
-included_dependencies = "top-level"
-format = "xml"
-output_options = { cdx = false, prefix = "cyclonedx" }
+      --license-accept-named <LICENSE_ACCEPT_NAMED>
+          Add license names which will not be warned about when parsing them as a SPDX expression fails
+
+      --spec-version <SPEC_VERSION>
+          The CycloneDX specification version to output: `1.3` or `1.4`. Defaults to 1.3
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+  -V, --version
+          Print version
 ```
 
-#### Example Package Configuration
+## Differences from other tools
 
-You can also specify your configuration in using package metadata in your package manifest.
+A number of language-independent tools support generating SBOMs for Rust projects. However, they typically rely on parsing the `Cargo.lock` file, which severely limits the information available to them.
 
-``` toml
-[package.metadata.cyclonedx]
-included_dependencies = "all"
-format = "json"
-output_options = { cdx = true, pattern = "package" }
-```
+By contrast, `cargo cyclonedx` sources data both from `Cargo.lock` and from [`cargo metadata`](https://doc.rust-lang.org/cargo/commands/cargo-metadata.html), which enables a number of features that tools limited to `Cargo.lock` cannot support:
+
+ - Create a SBOM for a particular crate or a particular binary, as opposed to the entire workspace
+ - Honor a particular combination of enabled Cargo features, matching your build configuration
+ - Omit dev-dependencies, which cannot affect the final executable
+ - Record additional fields such as the license for every component
+
+## Contributing
+
+See [CONTRIBUTING](../CONTRIBUTING.md) for details.
 
 ## Copyright & License
 

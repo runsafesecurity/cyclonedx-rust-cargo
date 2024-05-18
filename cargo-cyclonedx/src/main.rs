@@ -45,81 +45,67 @@
 * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 * SOFTWARE.
 */
-use cargo::core::Workspace;
-use cargo::Config;
-use cargo_cyclonedx::generator::SbomGenerator;
+use cargo_cyclonedx::{
+    config::{SbomConfig, Target},
+    generator::SbomGenerator,
+};
+
 use std::{
     io::{self},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
+
+use cargo_metadata::{self, CargoOpt, Metadata};
 
 use anyhow::Result;
 use clap::Parser;
 use env_logger::Builder;
 use log::LevelFilter;
 
-#[deny(clippy::all)]
-#[deny(warnings)]
 mod cli;
 use cli::{Args, Opts};
 
 fn main() -> anyhow::Result<()> {
     let Opts::Bom(args) = Opts::parse();
-    let mut config = Config::default()?;
-    setup_logging(&args, &mut config)?;
+    setup_logging(&args)?;
 
-    let manifest_path = locate_manifest(&args)?;
     let cli_config = args.as_config()?;
+    let manifest_path = locate_manifest(&args)?;
+    log::debug!("Found the Cargo.toml file at {}", manifest_path.display());
 
-    let ws = Workspace::new(&manifest_path, &config)?;
+    log::trace!("Running `cargo metadata` started");
+    let metadata = get_metadata(&args, &manifest_path, &cli_config)?;
+    log::trace!("Running `cargo metadata` finished");
 
     log::trace!("SBOM generation started");
-    let boms = SbomGenerator::create_sboms(ws, &cli_config)?;
+    let boms = SbomGenerator::create_sboms(metadata, &cli_config)?;
     log::trace!("SBOM generation finished");
 
     log::trace!("SBOM output started");
     for bom in boms {
-        bom.write_to_file()?;
+        bom.write_to_files()?;
     }
     log::trace!("SBOM output finished");
 
     Ok(())
 }
 
-fn setup_logging(args: &Args, config: &mut Config) -> anyhow::Result<()> {
+fn setup_logging(args: &Args) -> anyhow::Result<()> {
     let mut builder = Builder::new();
 
-    // default cargo internals to quiet unless overridden via an environment variable
-    // call with RUST_LOG='cargo::=debug' to access these logs
-    builder.filter_module("cargo::", LevelFilter::Error);
-
-    let level_filter = if args.quiet {
+    let level_filter = if args.quiet >= 2 {
         LevelFilter::Off
     } else {
         match args.verbose {
-            0 => LevelFilter::Error,
+            0 => LevelFilter::Warn,
             1 => LevelFilter::Info,
             2 => LevelFilter::Debug,
             _ => LevelFilter::Trace,
         }
     };
     builder.filter_level(level_filter);
-
     builder.parse_default_env(); // allow overriding CLI arguments
     builder.try_init()?;
-
-    // configure logging level of cargo to match what was passed via CLI
-    config.configure(
-        args.verbose as u32,
-        args.quiet,
-        None,
-        false,
-        false,
-        false,
-        &None,
-        &[],
-        &[],
-    )?;
 
     Ok(())
 }
@@ -140,4 +126,40 @@ fn locate_manifest(args: &Args) -> Result<PathBuf, io::Error> {
         );
         Ok(manifest_path)
     }
+}
+
+fn get_metadata(
+    args: &Args,
+    manifest_path: &Path,
+    config: &SbomConfig,
+) -> anyhow::Result<Metadata> {
+    let mut cmd = cargo_metadata::MetadataCommand::new();
+    cmd.manifest_path(manifest_path);
+
+    if let Some(feature_configuration) = config.features.as_ref() {
+        if feature_configuration.all_features {
+            cmd.features(CargoOpt::AllFeatures);
+        }
+        if feature_configuration.no_default_features {
+            cmd.features(CargoOpt::NoDefaultFeatures);
+        }
+        if !feature_configuration.features.is_empty() {
+            cmd.features(CargoOpt::SomeFeatures(
+                feature_configuration.features.clone(),
+            ));
+        }
+    }
+
+    if args.quiet == 0 {
+        // Contrary to the name, this does not enable verbose output.
+        // It merely forwards the cargo stdout to our stdout,
+        // so that `cargo metadata` can show a progressbar on long-running operations.
+        cmd.verbose(true);
+    }
+
+    if let Some(Target::SingleTarget(target)) = config.target.as_ref() {
+        cmd.other_options(vec!["--filter-platform".to_owned(), target.to_owned()]);
+    }
+
+    Ok(cmd.exec()?)
 }
