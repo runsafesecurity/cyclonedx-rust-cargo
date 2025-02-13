@@ -46,8 +46,6 @@ use super::vulnerability::Vulnerability;
 
 /// Represents the spec version of a BOM.
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Copy, PartialOrd, strum::Display)]
-#[repr(u16)]
-#[non_exhaustive]
 pub enum SpecVersion {
     #[strum(to_string = "1.3")]
     #[serde(rename = "1.3")]
@@ -79,7 +77,7 @@ impl FromStr for SpecVersion {
     }
 }
 
-pub(crate) fn validate_bom_ref(
+pub fn validate_bom_ref(
     _bom_ref: &BomReference,
     version: SpecVersion,
 ) -> Result<(), ValidationError> {
@@ -91,7 +89,7 @@ pub(crate) fn validate_bom_ref(
 
 /// A reference to a Bom element
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct BomReference(pub(crate) String);
+pub struct BomReference(pub String);
 
 impl BomReference {
     pub fn new<T>(input: T) -> Self
@@ -121,6 +119,7 @@ pub struct Bom {
     pub annotations: Option<Annotations>,
     /// Added in version 1.5
     pub formulation: Option<Vec<Formula>>,
+    pub spec_version: SpecVersion,
 }
 
 impl Bom {
@@ -142,10 +141,61 @@ impl Bom {
             match SpecVersion::from_str(version)? {
                 SpecVersion::V1_3 => Ok(crate::specs::v1_3::bom::Bom::deserialize(json)?.into()),
                 SpecVersion::V1_4 => Ok(crate::specs::v1_4::bom::Bom::deserialize(json)?.into()),
-                _ => Err(BomError::UnsupportedSpecVersion(version.to_string()).into()),
+                SpecVersion::V1_5 => Ok(crate::specs::v1_5::bom::Bom::deserialize(json)?.into()),
             }
         } else {
             Err(BomError::UnsupportedSpecVersion("No field 'specVersion' found".to_string()).into())
+        }
+    }
+
+    /// Parse the input as a JSON document conforming to the version of the specification that you provide.
+    /// Use [`parse_from_json`](Self::parse_from_json) if you want to support multiple versions instead.
+    pub fn parse_from_json_with_version<R: std::io::Read>(
+        reader: R,
+        version: SpecVersion,
+    ) -> Result<Self, crate::errors::JsonReadError> {
+        match version {
+            SpecVersion::V1_3 => Self::parse_from_json_v1_3(reader),
+            SpecVersion::V1_4 => Self::parse_from_json_v1_4(reader),
+            SpecVersion::V1_5 => Self::parse_from_json_v1_5(reader),
+        }
+    }
+
+    /// Output as a JSON document conforming to the specification version that you provide.
+    pub fn output_as_json<W: std::io::Write>(
+        self,
+        writer: &mut W,
+        version: SpecVersion,
+    ) -> Result<(), crate::errors::JsonWriteError> {
+        match version {
+            SpecVersion::V1_3 => self.output_as_json_v1_3(writer),
+            SpecVersion::V1_4 => self.output_as_json_v1_4(writer),
+            SpecVersion::V1_5 => self.output_as_json_v1_5(writer),
+        }
+    }
+
+    /// Parse the input as an XML document conforming to the version of the specification that you provide.
+    pub fn parse_from_xml_with_version<R: std::io::Read>(
+        reader: R,
+        version: SpecVersion,
+    ) -> Result<Self, crate::errors::XmlReadError> {
+        match version {
+            SpecVersion::V1_3 => Self::parse_from_xml_v1_3(reader),
+            SpecVersion::V1_4 => Self::parse_from_xml_v1_4(reader),
+            SpecVersion::V1_5 => Self::parse_from_xml_v1_5(reader),
+        }
+    }
+
+    /// Output as an XML document conforming to the specification version that you provide.
+    pub fn output_as_xml<W: std::io::Write>(
+        self,
+        writer: &mut W,
+        version: SpecVersion,
+    ) -> Result<(), crate::errors::XmlWriteError> {
+        match version {
+            SpecVersion::V1_3 => self.output_as_xml_v1_3(writer),
+            SpecVersion::V1_4 => self.output_as_xml_v1_4(writer),
+            SpecVersion::V1_5 => self.output_as_xml_v1_5(writer),
         }
     }
 
@@ -301,6 +351,7 @@ impl Default for Bom {
             signature: None,
             annotations: None,
             formulation: None,
+            spec_version: SpecVersion::V1_3,
         }
     }
 }
@@ -405,6 +456,10 @@ impl Validate for Bom {
         }
 
         context.into()
+    }
+
+    fn validate(&self) -> ValidationResult {
+        self.validate_version(self.spec_version)
     }
 }
 
@@ -514,7 +569,7 @@ fn validate_vulnerabilities_bom_refs(
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct UrnUuid(pub(crate) String);
+pub struct UrnUuid(pub String);
 
 impl UrnUuid {
     pub fn new(value: String) -> Result<Self, UrnUuidError> {
@@ -602,6 +657,7 @@ mod test {
     fn it_should_validate_an_empty_bom_as_passed() {
         let bom = Bom {
             version: 1,
+            spec_version: SpecVersion::V1_3,
             serial_number: None,
             metadata: None,
             components: None,
@@ -625,6 +681,7 @@ mod test {
     fn it_should_validate_broken_dependency_refs_as_failed() {
         let bom = Bom {
             version: 1,
+            spec_version: SpecVersion::V1_3,
             serial_number: None,
             metadata: None,
             components: None,
@@ -664,6 +721,7 @@ mod test {
     fn it_should_validate_broken_composition_refs_as_failed() {
         let bom = Bom {
             version: 1,
+            spec_version: SpecVersion::V1_5,
             serial_number: None,
             metadata: None,
             components: None,
@@ -703,6 +761,7 @@ mod test {
     fn it_should_validate_a_bom_with_multiple_validation_issues_as_failed() {
         let bom = Bom {
             version: 1,
+            spec_version: SpecVersion::V1_3,
             serial_number: Some(UrnUuid("invalid uuid".to_string())),
             metadata: Some(Metadata {
                 timestamp: Some(DateTime("invalid datetime".to_string())),
@@ -892,6 +951,7 @@ mod test {
 
         let validation_result = Bom {
             version: 1,
+            spec_version: SpecVersion::V1_4,
             serial_number: None,
             metadata: Some(Metadata {
                 timestamp: None,

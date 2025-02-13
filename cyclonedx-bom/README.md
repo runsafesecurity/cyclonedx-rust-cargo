@@ -8,9 +8,9 @@
 
 # `cyclonedx-bom`
 
-The [CycloneDX](https://cyclonedx.org/) library provides JSON and XML serialization and derserialization of Software Bill-of-Materials (SBOM) files.
+The [CycloneDX](https://cyclonedx.org/) library provides JSON and XML serialization and deserialization of Software Bill-of-Materials (SBOM) files.
 
-CycloneDX is a lightweight SBOM specification that is easily created, human and machine-readable, and simple to parse.
+CycloneDX is a full-stack SBOM/xBOM standard designed for use in application security contexts and supply chain component analysis.
 
 The library is intended to enable developers to:
 
@@ -20,7 +20,7 @@ The library is intended to enable developers to:
          
 ## Supported CycloneDX versions
 
-This library currently supports CycloneDX 1.3 and 1.4.
+This library currently supports CycloneDX 1.3, 1.4 and 1.5.
 
 ## Usage
 
@@ -31,14 +31,14 @@ use cyclonedx_bom::prelude::*;
 
 let bom_json = r#"{
   "bomFormat": "CycloneDX",
-  "specVersion": "1.3",
+  "specVersion": "1.5",
   "serialNumber": "urn:uuid:3e671687-395b-41f5-a30f-a58921a69b79",
   "version": 1
 }"#;
-let bom = Bom::parse_from_json_v1_3(bom_json.as_bytes()).expect("Failed to parse BOM");
+let bom = Bom::parse_from_json_v1_5(bom_json.as_bytes()).expect("Failed to parse BOM");
 
-let validation_result = bom.validate().expect("Failed to validate BOM");
-assert_eq!(validation_result, ValidationResult::Passed);
+let validation_result = bom.validate();
+assert!(validation_result.passed());
 ```
 
 ### Create and output an SBOM
@@ -55,7 +55,7 @@ let bom = Bom {
             .expect("Failed to create UrnUuid"),
     ),
     metadata: Some(Metadata {
-        tools: Some(Tools(vec![Tool {
+        tools: Some(Tools::List(vec![Tool {
             name: Some(NormalizedString::new("my_tool")),
             ..Tool::default()
         }])),
@@ -66,14 +66,14 @@ let bom = Bom {
 
 let mut output = Vec::<u8>::new();
 
-bom.output_as_json_v1_3(&mut output)
+bom.output_as_json_v1_5(&mut output)
     .expect("Failed to write BOM");
 let output = String::from_utf8(output).expect("Failed to read output as a string");
 assert_eq!(
     output,
     r#"{
   "bomFormat": "CycloneDX",
-  "specVersion": "1.3",
+  "specVersion": "1.5",
   "version": 1,
   "serialNumber": "urn:uuid:3e671687-395b-41f5-a30f-a58921a69b79",
   "metadata": {
@@ -94,6 +94,10 @@ See [README](./tests/README.md) for details.
 ## Contributing
 
 See [CONTRIBUTING](../CONTRIBUTING.md) for details.
+
+### Bug Bounty
+
+We are running a [Bug Bounty](https://yeswehack.com/programs/cyclonedx-rust-cargo-bounty-program) program financed by the [Bug Resilience Program](https://www.sovereigntechfund.de/programs/bug-resilience/faq) of the [Sovereign Tech Fund](https://www.sovereigntechfund.de/). Thank you very much!
 
 ## Copyright & License
 
