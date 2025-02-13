@@ -16,7 +16,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-//! The `cyclonedx-bom` library provides JSON and XML serialization and derserialization of Software
+//! The `cyclonedx-bom` library provides JSON and XML serialization and deserialization of Software
 //! Bill-of-Materials (SBOM) files.
 //!
 //! [CycloneDX](https://cyclonedx.org/) is a lightweight SBOM specification that is easily created,
@@ -126,7 +126,6 @@ pub mod errors;
 pub mod external_models;
 pub mod models;
 pub mod prelude;
-pub mod schema;
 pub mod validation;
 
 mod specs;

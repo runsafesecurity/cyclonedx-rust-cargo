@@ -97,9 +97,13 @@ Defaults to the host target, as printed by 'rustc -vV'"
     #[clap(long = "license-accept-named", action=ArgAction::Append)]
     pub license_accept_named: Vec<String>,
 
-    /// The CycloneDX specification version to output: `1.3` or `1.4`. Defaults to 1.3
+    /// The CycloneDX specification version to output: `1.3`, `1.4` or `1.5`. Defaults to 1.3
     #[clap(long = "spec-version")]
     pub spec_version: Option<SpecVersion>,
+
+    /// Do not include build-time dependencies in the SBOM
+    #[clap(long = "no-build-deps")]
+    pub no_build_deps: bool,
 }
 
 impl Args {
@@ -170,6 +174,7 @@ impl Args {
 
         let describe = self.describe;
         let spec_version = self.spec_version;
+        let only_normal_deps = Some(self.no_build_deps);
 
         Ok(SbomConfig {
             format: self.format,
@@ -180,6 +185,7 @@ impl Args {
             license_parser,
             describe,
             spec_version,
+            only_normal_deps,
         })
     }
 }
@@ -188,6 +194,11 @@ impl Args {
 pub enum ArgsError {
     #[error("Invalid filename")]
     FilenameOverrideError(#[from] FilenameOverrideError),
+}
+
+#[cfg(test)]
+pub fn parse_to_config(args: &[&str]) -> SbomConfig {
+    Args::parse_from(args.iter()).as_config().unwrap()
 }
 
 #[cfg(test)]
@@ -220,10 +231,6 @@ mod tests {
         assert!(contains_feature(&config, "foo"));
         assert!(contains_feature(&config, "bar"));
         assert!(!contains_feature(&config, ""));
-    }
-
-    fn parse_to_config(args: &[&str]) -> SbomConfig {
-        Args::parse_from(args.iter()).as_config().unwrap()
     }
 
     fn contains_feature(config: &SbomConfig, feature: &str) -> bool {

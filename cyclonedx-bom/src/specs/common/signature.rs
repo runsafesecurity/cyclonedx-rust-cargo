@@ -165,7 +165,7 @@ impl From<models::signature::Signer> for Signer {
     fn from(signer: models::signature::Signer) -> Self {
         Self {
             algorithm: signer.algorithm.into(),
-            value: signer.value.clone(),
+            value: signer.value,
         }
     }
 }
@@ -174,7 +174,7 @@ impl From<Signer> for models::signature::Signer {
     fn from(signer: Signer) -> Self {
         Self {
             algorithm: signer.algorithm.into(),
-            value: signer.value.to_string(),
+            value: signer.value,
         }
     }
 }
@@ -422,7 +422,7 @@ pub(crate) mod test {
     }
 
     #[test]
-    fn it_shoud_fail_with_missing_value() {
+    fn it_should_fail_with_missing_value() {
         let input = r#"
 <signature>
     <algorithm><RS512/algorithm>
