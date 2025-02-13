@@ -5,3 +5,11 @@ members = [
     "build_dep",
     "runtime_dep_of_build_dep",
 ]
+
+[package]
+name = "top_level_package"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "./runtime_dep_of_build_dep/src/lib.rs"

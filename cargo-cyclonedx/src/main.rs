@@ -228,4 +228,23 @@ mod tests {
             != NormalizedString::new("runtime_dep_of_build_dep")
             || c.scope == Some(Scope::Excluded)));
     }
+
+    #[test]
+    fn generate_one_sbom_only() {
+        use crate::cli;
+        use crate::generate_sboms;
+        use clap::Parser;
+        use std::path::PathBuf;
+
+        let mut test_cargo_toml = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        test_cargo_toml.push("tests/fixtures/build_then_runtime_dep/Cargo.toml");
+
+        let path_arg = &format!("--manifest-path={}", test_cargo_toml.display());
+        let args = ["cyclonedx", path_arg];
+        let args_parsed = cli::Args::parse_from(args.iter());
+
+        let sboms = generate_sboms(&args_parsed).unwrap();
+
+        assert_eq!(sboms.len(), 1);
+    }
 }

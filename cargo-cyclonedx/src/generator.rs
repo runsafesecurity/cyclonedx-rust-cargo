@@ -57,7 +57,6 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 
 use log::Level;
-use std::any::Any;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::convert::TryFrom;
