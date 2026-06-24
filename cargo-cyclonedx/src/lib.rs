@@ -19,6 +19,7 @@
 pub mod config;
 pub mod format;
 pub mod generator;
+pub mod lockfile_resolve;
 pub mod platform;
 pub mod purl;
 pub mod urlencode;

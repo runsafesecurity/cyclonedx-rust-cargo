@@ -21,6 +21,7 @@ use crate::config::PlatformSuffix;
 use crate::config::SbomConfig;
 use crate::config::{IncludedDependencies, ParseMode};
 use crate::format::Format;
+use crate::lockfile_resolve;
 use crate::purl::get_purl;
 
 use cargo_metadata;
@@ -93,8 +94,38 @@ impl SbomGenerator {
     ) -> Result<Vec<GeneratedSbom>, GeneratorError> {
         log::trace!("Processing the workspace {}", meta.workspace_root);
         let members: Vec<PackageId> = meta.workspace_members;
-        let packages = index_packages(meta.packages);
-        let resolve = index_resolve(meta.resolve.unwrap().nodes);
+        let mut packages = index_packages(meta.packages);
+        let resolve = if config.lockfile_only() {
+            log::info!(
+                "Building dependency graph from Cargo.lock without fetching crates from registries"
+            );
+            let first_member = members.first().ok_or(GeneratorError::NoWorkspaceMembers)?;
+            let manifest_path = packages[first_member]
+                .manifest_path
+                .clone()
+                .into_std_path_buf();
+            let lock_path = locate_cargo_lock(&manifest_path).map_err(|err| {
+                GeneratorError::LockfileRequired {
+                    source: err.into(),
+                }
+            })?;
+            let lockfile = Lockfile::load(&lock_path).map_err(|err| {
+                GeneratorError::LockfileParseError {
+                    path: lock_path.clone(),
+                    source: err.into(),
+                }
+            })?;
+            let (merged_packages, lockfile_resolve) =
+                lockfile_resolve::packages_and_resolve_from_lockfile(packages, &lockfile);
+            packages = merged_packages;
+            lockfile_resolve
+        } else {
+            index_resolve(
+                meta.resolve
+                    .ok_or(GeneratorError::ResolveMissing)?
+                    .nodes,
+            )
+        };
 
         let mut result = Vec::with_capacity(members.len());
         for member in members.iter() {
@@ -571,6 +602,25 @@ pub enum GeneratorError {
 
     #[error("Could not parse author string: {}", .0)]
     AuthorParseError(String),
+
+    #[error("No workspace members found in cargo metadata output")]
+    NoWorkspaceMembers,
+
+    #[error("Cargo metadata did not include a resolve graph")]
+    ResolveMissing,
+
+    #[error("Cargo.lock is required for --lockfile-only but could not be found")]
+    LockfileRequired {
+        #[source]
+        source: anyhow::Error,
+    },
+
+    #[error("Failed to parse Cargo.lock at {}", path.display())]
+    LockfileParseError {
+        path: PathBuf,
+        #[source]
+        source: anyhow::Error,
+    },
 }
 
 /// Generates the `Dependencies` field in the final SBOM
@@ -876,19 +926,15 @@ fn package_hashes(lockfile: &Lockfile) -> HashMap<cargo_metadata::PackageId, Che
     let mut result = HashMap::new();
     for pkg in &lockfile.packages {
         if let Some(hash) = pkg.checksum.as_ref() {
-            result.insert(cargo_metadata::PackageId { repr: pkgid(pkg) }, hash.clone());
+            result.insert(
+                cargo_metadata::PackageId {
+                    repr: lockfile_resolve::lockfile_package_id(pkg),
+                },
+                hash.clone(),
+            );
         }
     }
     result
-}
-
-/// Returns a Cargo unique identifier for a package.
-/// See `cargo help pkgid` for more info.
-fn pkgid(pkg: &cargo_lock::Package) -> String {
-    match pkg.source.as_ref() {
-        Some(source) => format!("{}#{}@{}", source, pkg.name, pkg.version),
-        None => format!("{}@{}", pkg.name, pkg.version),
-    }
 }
 
 /// Converts a checksum from the `cargo-lock` crate format to `cyclonedx-bom` crate format

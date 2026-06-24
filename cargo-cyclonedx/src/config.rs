@@ -33,6 +33,8 @@ pub struct SbomConfig {
     pub license_parser: Option<LicenseParserOptions>,
     pub describe: Option<Describe>,
     pub spec_version: Option<SpecVersion>,
+    pub only_normal_deps: Option<bool>,
+    pub lockfile_only: Option<bool>,
 }
 
 impl SbomConfig {
@@ -57,6 +59,8 @@ impl SbomConfig {
                 .or_else(|| self.license_parser.clone()),
             describe: other.describe.or(self.describe),
             spec_version: other.spec_version.or(self.spec_version),
+            only_normal_deps: other.only_normal_deps.or(self.only_normal_deps),
+            lockfile_only: other.lockfile_only.or(self.lockfile_only),
         }
     }
 
@@ -74,6 +78,10 @@ impl SbomConfig {
 
     pub fn license_parser(&self) -> LicenseParserOptions {
         self.license_parser.clone().unwrap_or_default()
+    }
+
+    pub fn lockfile_only(&self) -> bool {
+        self.lockfile_only.unwrap_or(false)
     }
 }
 

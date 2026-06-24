@@ -100,6 +100,18 @@ Defaults to the host target, as printed by 'rustc -vV'"
     /// The CycloneDX specification version to output: `1.3` or `1.4`. Defaults to 1.3
     #[clap(long = "spec-version")]
     pub spec_version: Option<SpecVersion>,
+
+    /// Do not include build-time dependencies in the SBOM
+    #[clap(long = "no-build-deps")]
+    pub no_build_deps: bool,
+
+    /// Build the dependency graph from Cargo.lock without fetching crates from registries.
+    ///
+    /// Workspace crate metadata is still read from Cargo.toml via `cargo metadata --no-deps`.
+    /// Third-party crates are included from the lockfile with name, version, PURL, and checksum,
+    /// but without license or author information from crate manifests.
+    #[clap(long = "lockfile-only")]
+    pub lockfile_only: bool,
 }
 
 impl Args {
@@ -170,6 +182,8 @@ impl Args {
 
         let describe = self.describe;
         let spec_version = self.spec_version;
+        let only_normal_deps = Some(self.no_build_deps);
+        let lockfile_only = Some(self.lockfile_only);
 
         Ok(SbomConfig {
             format: self.format,
@@ -180,6 +194,8 @@ impl Args {
             license_parser,
             describe,
             spec_version,
+            only_normal_deps,
+            lockfile_only,
         })
     }
 }

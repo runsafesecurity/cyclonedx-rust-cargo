@@ -34,8 +34,10 @@ percent-encoding = "2.3.1"
 purl = { version = "0.1.2", default-features = false, features = ["package-type"] }
 regex = "1.9.3"
 serde = { version = "1.0.193", features = ["derive"] }
-thiserror = "1.0.48"
-validator = { version = "0.16.1" }
+serde_json = "1.0.108"
+time = "0.3.36"
+thiserror = "2.0.0"
+validator = { version = "0.20.0" }
 
 [dev-dependencies]
 assert_cmd = "2.0.12"
