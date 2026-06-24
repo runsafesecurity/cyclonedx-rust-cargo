@@ -187,12 +187,41 @@ fn get_metadata(
         cmd.other_options(vec!["--filter-platform".to_owned(), target.to_owned()]);
     }
 
+    if config.lockfile_only() {
+        cmd.no_deps();
+    }
+
     Ok(cmd.exec()?)
 }
 
 #[cfg(test)]
 mod tests {
     use cyclonedx_bom::prelude::NormalizedString;
+
+    #[test]
+    fn lockfile_only_generates_dependency_sbom() {
+        use crate::cli;
+        use crate::generate_sboms;
+        use clap::Parser;
+        use std::path::PathBuf;
+
+        let mut test_cargo_toml = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        test_cargo_toml.push("tests/fixtures/build_then_runtime_dep/top_level_crate/Cargo.toml");
+
+        let path_arg = &format!("--manifest-path={}", test_cargo_toml.display());
+        let args = ["cyclonedx", path_arg, "--lockfile-only"];
+        let args_parsed = cli::Args::parse_from(args.iter());
+
+        let sboms = generate_sboms(&args_parsed).unwrap();
+        let components = sboms[0].bom.components.as_ref().unwrap();
+        assert!(
+            components
+                .0
+                .iter()
+                .any(|c| c.name == cyclonedx_bom::prelude::NormalizedString::new("build_dep")),
+            "expected build_dep in SBOM components"
+        );
+    }
 
     #[test]
     fn parse_toml_only_normal() {
